@@ -1,5 +1,13 @@
 
 # Moonlight Web
+
+> **Modified fork.** This is a modified version of
+> [MrCreativ3001/moonlight-web-stream](https://github.com/MrCreativ3001/moonlight-web-stream),
+> maintained on the `lightning` branch for use with the Lightning Launcher. It is distributed
+> under the same GPL-3.0-or-later license. Changes from upstream are listed in
+> [`LIGHTNING_CHANGES.md`](LIGHTNING_CHANGES.md). Please report issues with this fork here,
+> not upstream.
+
 An unofficial [Moonlight Client](https://moonlight-stream.org/) allowing you to stream your pc to the Web.
 It hosts a Web Server which will forward [Sunshine](https://docs.lizardbyte.dev/projects/sunshine/latest/) traffic to a Browser using the [WebRTC Api](https://webrtc.org/).
 
