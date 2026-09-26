@@ -12,6 +12,7 @@ import { StreamStats } from "./stats"
 import { Transport, TransportAudioType, TransportConnectData, TransportOptions, TransportShutdown, TransportVideoType } from "./transport/index"
 import { WebSocketTransport } from "./transport/web_socket"
 import { WebRTCTransport } from "./transport/webrtc"
+import { probeDirectConnection } from "./transport/webrtc_probe"
 import { allVideoCodecs, andVideoCodecs, emptyVideoCodecs, hasAnyCodec } from "./video"
 import { VideoRenderer, VideoRendererSetup } from "./video/index"
 import { buildVideoPipeline, queryVideoPipelineInfo, VideoPipelineOptions } from "./video/pipeline"
@@ -230,7 +231,17 @@ export class Stream implements Component {
         // Get configuration
         const config = await apiWebRTCConfiguration(this.api)
 
-        this.debugLog("Received WebRTC Config, Creating Transport")
+        // Probe the network first with a data-channel-only connection. The host never starts
+        // streaming for it, so a network that cannot connect directly doesn't wake Sunshine.
+        this.debugLog("Received WebRTC Config, probing direct connection")
+
+        const probe = await probeDirectConnection(this.api, { iceServers: config.iceServers }, this.logger)
+        if (!probe.connected) {
+            this.debugLog(`Direct connection probe failed (${probe.reason}): this network cannot reach the host directly, so the stream was not started`, { type: "ifErrorDescription" })
+            return "failednoconnect"
+        }
+
+        this.debugLog(`Direct connection probe succeeded (local ${probe.localType}, remote ${probe.remoteType}), creating transport`)
 
         // Create transport
         const transport = new WebRTCTransport(

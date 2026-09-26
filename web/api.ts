@@ -524,6 +524,28 @@ export type WebRTCAnswer = {
     location: string | null,
 }
 
+/// Connection probe: the host answers with a data-channel-only peer and never starts a stream.
+export async function apiWebRTCProbe(api: Api, offerSdp: string): Promise<string> {
+    const ENDPOINT = "/host/stream/webrtc/probe"
+
+    const [url, request] = buildRequest(api, ENDPOINT, POST, { sdp: offerSdp })
+
+    let response
+    try {
+        response = await fetch(url, request)
+    } catch (e: any) {
+        throw new FetchError("unknown", ENDPOINT, POST, e)
+    }
+
+    // 201 == Created
+    if (response.status != 201) {
+        const reason = await response.text()
+        throw new FetchError("failed", ENDPOINT, POST, response, reason)
+    }
+
+    return await response.text()
+}
+
 export async function apiWebRTCOffer(api: Api, offerSdp: string): Promise<WebRTCAnswer> {
     const ENDPOINT = "/host/stream/webrtc"
 

@@ -39,9 +39,9 @@ use rtc::rtp_transceiver::rtp_sender::{
     RTCPFeedback, RTCRtpCodec, RTCRtpCodecParameters, RTCRtpHeaderExtensionCapability, RtpCodecKind,
 };
 use std::collections::HashMap;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
 use tokio::sync::Notify;
 use tokio::sync::mpsc::{self};
@@ -255,6 +255,182 @@ impl PeerConnectionEventHandler for WebRtcHandler {
     }
 }
 
+/// Network settings shared by the stream and the connection probe, so the probe tests
+/// exactly the path the stream will use.
+fn network_setting_engine(app: &App) -> SettingEngineBuilder {
+    let mut setting_engine = SettingEngineBuilder::new();
+    if let Some(mapping) = app.config().webrtc.nat_1to1.as_ref() {
+        setting_engine = setting_engine.with_nat_1to1_ips(
+            mapping.ips.clone(),
+            into_webrtc_ice_candidate(mapping.ice_candidate_type),
+        );
+    }
+
+    setting_engine = setting_engine
+        .with_include_loopback_candidate(app.config().webrtc.include_loopback_candidates);
+
+    setting_engine = setting_engine.with_ice_timeouts(
+        Some(Duration::from_secs(5)),
+        Some(Duration::from_secs(15)),
+        Some(Duration::from_secs(2)),
+    );
+
+    // IPv6 too: with IPv6 on both ends there is no NAT/CGNAT in the way, which is what makes
+    // mobile networks with "hard" NAT (e.g. carrier CGNAT) reachable without a relay.
+    setting_engine.with_network_types(vec![NetworkType::Udp4, NetworkType::Udp6])
+}
+
+/// Local UDP addresses to bind, honoring the configured port range.
+async fn local_udp_addrs(app: &App) -> Result<Vec<SocketAddr>, AppError> {
+    let port = if let Some(PortRange { min, max }) = app.config().webrtc.port_range {
+        let mut valid_port = None;
+
+        // Try to bind a udp socket to see if the port is available
+        for port in min..=max {
+            let addr = SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), port);
+
+            if UdpSocket::bind(addr).await.is_ok() {
+                valid_port = Some(port);
+                break;
+            }
+        }
+
+        match valid_port {
+            Some(port) => port,
+            None => {
+                error!(port_min = %min, port_max = %max, "No available udp port found in given port range. Cannot create webrtc peer!");
+                return Err(AppError::WebRTC(
+                    webrtc::error::Error::ErrAddressAlreadyInUse,
+                ));
+            }
+        }
+    } else {
+        0
+    };
+
+    // Wildcards expand to one socket per interface address of that family (link-local and
+    // loopback skipped); a machine without IPv6 just gets no IPv6 host candidates.
+    Ok(vec![
+        SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), port),
+        SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), port),
+    ])
+}
+
+/// Connection probe: a data-channel-only peer with the same network settings as the stream.
+/// The client runs it before asking for a stream, so a network that cannot connect directly
+/// never makes the host start streaming. It closes itself shortly after connecting, or once
+/// the client has certainly given up.
+#[post("/probe")]
+#[instrument(skip(app, user, session_description), fields(user = %user.id()))]
+pub async fn webrtc_probe_post(
+    app: Data<App>,
+    user: AuthenticatedUser,
+    session_description: String,
+) -> Result<HttpResponse, AppError> {
+    let offer = RTCSessionDescription::offer(session_description)?;
+
+    let ice_servers = generate_ice_servers(&app).await?;
+    let local_addrs = local_udp_addrs(&app).await?;
+
+    // The probe has no use for data channels; the receiver is dropped right away.
+    let (on_data_channel_sender, _) = mpsc::unbounded_channel::<Arc<dyn DataChannel>>();
+    let handler = Arc::new(WebRtcHandler {
+        peer_state: Mutex::new(RTCPeerConnectionState::New),
+        on_ice_gathering_finished: Notify::new(),
+        on_data_channel_sender,
+    });
+
+    let peer = PeerConnectionBuilder::default()
+        .with_setting_engine(network_setting_engine(&app).build())
+        .with_udp_addrs(local_addrs)
+        .with_handler(handler.clone())
+        .with_configuration(
+            RTCConfigurationBuilder::default()
+                .with_ice_servers(
+                    ice_servers
+                        .iter()
+                        .map(|x| RTCIceServer {
+                            username: x.username.clone(),
+                            credential: x.credential.clone(),
+                            urls: x.urls.clone(),
+                        })
+                        .collect(),
+                )
+                .build(),
+        )
+        .build()
+        .await?;
+    let peer = Arc::new(peer) as Arc<dyn PeerConnection>;
+
+    if let Err(err) = peer.set_remote_description(offer).await {
+        error!(error = %err, "connection probe: failed to set remote description");
+        peer.close().await?;
+        return Err(err.into());
+    }
+
+    let answer = peer.create_answer(None).await?;
+    if let Err(err) = peer.set_local_description(answer).await {
+        error!(error = %err, "connection probe: failed to set local description");
+        peer.close().await?;
+        return Err(err.into());
+    }
+
+    select! {
+        _ = handler.on_ice_gathering_finished.notified() => {},
+        _ = sleep(Duration::from_secs(4)) => {
+            warn!("connection probe: ice gathering incomplete after 4 seconds, answering anyway");
+        }
+    }
+
+    let answer = peer
+        .local_description()
+        .await
+        .expect("webrtc_probe_post: peer.local_description()");
+
+    spawn(
+        {
+            let peer = peer.clone();
+            let handler = handler.clone();
+
+            async move {
+                // The client gives up after 12 s; 20 s covers slow ICE without leaking peers.
+                let started = Instant::now();
+                loop {
+                    sleep(Duration::from_millis(250)).await;
+
+                    let state = *handler.peer_state.lock().expect("lock peer state");
+                    match state {
+                        RTCPeerConnectionState::Connected => {
+                            info!("connection probe connected");
+                            // Let the client observe the connected state before closing.
+                            sleep(Duration::from_secs(3)).await;
+                            break;
+                        }
+                        RTCPeerConnectionState::Failed | RTCPeerConnectionState::Closed => {
+                            info!(state = %state, "connection probe did not connect");
+                            break;
+                        }
+                        _ if started.elapsed() > Duration::from_secs(20) => {
+                            info!("connection probe timed out");
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+
+                if let Err(err) = peer.close().await {
+                    warn!(error = %err, "connection probe: failed to close peer");
+                }
+            }
+        }
+        .instrument(debug_span!("connection probe")),
+    );
+
+    Ok(HttpResponse::Created()
+        .content_type("application/sdp")
+        .body(answer.sdp))
+}
+
 #[post("")]
 #[instrument(skip(app, user, req, session_description), fields(user = %user.id()))]
 pub async fn webrtc_post(
@@ -301,24 +477,7 @@ pub async fn webrtc_post(
 
     // -- Create WebRtc peer
     // Create settings
-    let mut setting_engine = SettingEngineBuilder::new();
-    if let Some(mapping) = app.config().webrtc.nat_1to1.as_ref() {
-        setting_engine = setting_engine.with_nat_1to1_ips(
-            mapping.ips.clone(),
-            into_webrtc_ice_candidate(mapping.ice_candidate_type),
-        );
-    }
-
-    setting_engine = setting_engine
-        .with_include_loopback_candidate(app.config().webrtc.include_loopback_candidates);
-
-    setting_engine = setting_engine.with_ice_timeouts(
-        Some(Duration::from_secs(5)),
-        Some(Duration::from_secs(15)),
-        Some(Duration::from_secs(2)),
-    );
-
-    setting_engine = setting_engine.with_network_types(vec![NetworkType::Udp4]);
+    let setting_engine = network_setting_engine(&app);
 
     // Create video
     let mut video_channel = VideoChannel::new(
@@ -349,33 +508,7 @@ pub async fn webrtc_post(
     )
     .expect("register default interceptors");
 
-    // Find available port
-    let port = if let Some(PortRange { min, max }) = app.config().webrtc.port_range {
-        let mut valid_port = None;
-
-        // Try to bind a udp socket to see if the port is available
-        for port in min..=max {
-            let addr = SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), port);
-
-            if UdpSocket::bind(addr).await.is_ok() {
-                valid_port = Some(port);
-                break;
-            }
-        }
-
-        match valid_port {
-            Some(port) => port,
-            None => {
-                error!(port_min = %min, port_max = %max, "No available udp port found in given port range. Cannot create webrtc peer!");
-                return Err(AppError::WebRTC(
-                    webrtc::error::Error::ErrAddressAlreadyInUse,
-                ));
-            }
-        }
-    } else {
-        0
-    };
-    let local_addrs = vec![SocketAddr::new(Ipv4Addr::new(0, 0, 0, 0).into(), port)];
+    let local_addrs = local_udp_addrs(&app).await?;
 
     // Initialize senders and receivers for events
     let (on_data_channel_sender, on_data_channel) =
