@@ -467,37 +467,39 @@ fn get_video_formats(sdp: &Session) -> HashMap<VideoFormat, RTCRtpCodecParameter
                 },
             );
         } else if codec.eq_ignore_ascii_case("AV1") {
-            // Get profile
-            let mut format = VideoFormat::Av1Main8;
+            // Get profile. RTP payload format for AV1: 0 = Main, 1 = High (4:4:4),
+            // 2 = Professional; no profile means Main. Each profile covers 8 and 10 bit, so the
+            // 10 bit format (HDR) is announced with the same payload type (Lightning fork).
+            let mut profile_formats = [VideoFormat::Av1Main8, VideoFormat::Av1Main10];
 
             let attributes = sdp_fmtp_line.split(";");
             for (attribute, value) in attributes.filter_map(|attribute| attribute.split_once("=")) {
                 if attribute == "profile" {
                     match value {
-                        "1" => format = VideoFormat::Av1Main8,
-                        "2" => format = VideoFormat::Av1High8_444,
-                        "4" => {
-                            // TODO: range extensions
+                        "0" => profile_formats = [VideoFormat::Av1Main8, VideoFormat::Av1Main10],
+                        "1" => {
+                            profile_formats = [VideoFormat::Av1High8_444, VideoFormat::Av1High10_444]
                         }
-                        // TODO: how do the Main10 / High10 profiles work?
                         _ => debug!(profile = ?value, "unknown av1 profile"),
                     }
                 }
             }
 
-            formats.insert(
-                format,
-                RTCRtpCodecParameters {
-                    rtp_codec: RTCRtpCodec {
-                        mime_type: MIME_TYPE_AV1.to_string(),
-                        sdp_fmtp_line: sdp_fmtp_line.to_string(),
-                        clock_rate: *clock_rate,
-                        rtcp_feedback: video_rtcp_feedback(),
-                        ..Default::default()
+            for format in profile_formats {
+                formats.insert(
+                    format,
+                    RTCRtpCodecParameters {
+                        rtp_codec: RTCRtpCodec {
+                            mime_type: MIME_TYPE_AV1.to_string(),
+                            sdp_fmtp_line: sdp_fmtp_line.to_string(),
+                            clock_rate: *clock_rate,
+                            rtcp_feedback: video_rtcp_feedback(),
+                            ..Default::default()
+                        },
+                        payload_type: *pt,
                     },
-                    payload_type: *pt,
-                },
-            );
+                );
+            }
         }
     }
 

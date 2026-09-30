@@ -27,7 +27,8 @@ actix-ws = "0.4.0"
 
 # Moonlight
 # Make sure to keep the ubrn.config.yaml repo the same as this
-moonlight-common = { git = "https://github.com/MrCreativ3001/moonlight-common-rust.git", rev = "cc7ec8c3b3063742f4941500dcb78650bd0a9b98", features = [
+# Lightning fork: fork of moonlight-common-rust with AV1 negotiation (branch lightning)
+moonlight-common = { git = "https://github.com/Ian-Daniel-Alves-Nascimento/moonlight-common-rust.git", rev = "2f677b387cd4d3fee6b3390dafc60974d9cf260d", features = [
     "tokio",
     "tokio-hyper",
     "rustcrypto",
@@ -65,9 +66,10 @@ uuid = { version = "1.24.0" }
 hex = { version = "0.4.3" }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_System_Console"] }
+windows-sys = { version = "0.61.2", features = ["Win32_System_Console", "Win32_Graphics_Gdi"] }
 
 [lints.clippy]
 too_many_arguments = "allow"
 unwrap_used = "warn"
 todo = "warn"
+

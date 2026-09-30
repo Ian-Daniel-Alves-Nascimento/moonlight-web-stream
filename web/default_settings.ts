@@ -8,15 +8,25 @@ const trueDefaultSettings: Settings =
     "hideSidebarButton": false,
     "bitrate": 10000,
     "fps": 60,
-    // possible values: "720p", "1080p", "1440p", "4k", "native", "custom"
-    "videoSize": "custom",
+    // possible values: "auto", "full", "safe", "720p", "1080p", "1440p", "4k", "custom"
+    // (Lightning fork: "auto" = the monitor's resolution with a physical monitor, this screen's
+    // with a virtual display)
+    "videoSize": "auto",
     // only works if videoSize=custom
     "videoSizeCustom": {
         "width": 1920,
         "height": 1080
     },
-    // possible values: "h264", "h265", "av1", "auto"
-    "videoCodec": "h264",
+    // Lightning fork: render less on the host and upscale on this device (off = original behavior)
+    "upscaling": false,
+    // possible values: "auto" (half the screen, at least 720p), "75", "67", "50" (percent)
+    "upscalingRenderScale": "auto",
+    // possible values: "auto" (the best level this device keeps up with, FSR 1 at most), "fsr1" (quality),
+    // "nis" (balanced), "sgsr" (performance), "sharpen" (sharpening only)
+    "upscalingAlgorithm": "auto",
+    // possible values: "h264", "h265", "av1", "auto" (Lightning fork: the best one this device
+    // decodes in hardware, H.264 otherwise; see stream/codec.ts)
+    "videoCodec": "auto",
     "forceVideoElementRenderer": false,
     "canvasRenderer": false,
     // Canvas only: when true, draw only on requestAnimationFrame (stable, may add ~0–17 ms). When false, draw on frame submit (low latency).
@@ -35,9 +45,10 @@ const trueDefaultSettings: Settings =
         // possible values: null or a number, example: 60, 120
         "sendIntervalOverride": null
     },
-    // possible values: "auto", "webrtc", "websocket"
+    // possible values: "auto", "webrtc", "websocket" (Lightning fork: "auto" = WebRTC only)
     "dataTransport": "auto",
-    "language": "en",
+    // "auto" follows the device language (Lightning fork)
+    "language": "auto",
     "enterFullscreenOnStreamStart": false,
     "toggleFullscreenWithKeybind": false,
     // possible values: "standard", "old"

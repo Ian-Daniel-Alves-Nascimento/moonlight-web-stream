@@ -1,7 +1,7 @@
 import { ControllerConfig } from "../stream/gamepad"
 import { MouseMode, MouseScrollMode, TouchMode } from "../stream/input"
 import { PageStyle } from "../styles/index"
-import { getLanguageOptions, getTranslations, Language, normalizeLanguage } from "../i18n"
+import { getLanguageOptions, getTranslations, LanguageSetting, normalizeLanguage } from "../i18n"
 import { Component, ComponentEvent } from "./index"
 import { InputComponent, SelectComponent } from "./input"
 import { SidebarEdge } from "./sidebar/index"
@@ -11,12 +11,21 @@ export type Settings = {
     sidebarEdge: SidebarEdge,
     hideSidebarButton: boolean,
     bitrate: number
-    videoSize: "720p" | "1080p" | "1440p" | "4k" | "native" | "custom"
+    /// Lightning fork: "auto" (monitor's resolution with the physical monitor, this screen's with
+    /// a virtual display), "full" (this screen, physical pixels), "safe" (this screen without the
+    /// notch area). "native" is the old name of "full".
+    videoSize: "auto" | "full" | "safe" | "720p" | "1080p" | "1440p" | "4k" | "native" | "custom"
     videoSizeCustom: {
         width: number
         height: number
     },
     fps: number
+    /// Lightning fork: ask the host for a smaller resolution and upscale on this device.
+    upscaling: boolean
+    /// With a virtual display: how much of this device's resolution the host renders.
+    upscalingRenderScale: UpscalingRenderScale
+    /// Upscaler run on this device (FSR 1 = quality, NIS = balanced, SGSR = performance).
+    upscalingAlgorithm: UpscalingAlgorithm
     videoCodec: StreamCodec,
     forceVideoElementRenderer: boolean
     canvasRenderer: boolean
@@ -28,7 +37,7 @@ export type Settings = {
     localCursorSensitivity: number
     controllerConfig: ControllerConfig
     dataTransport: TransportType
-    language: Language
+    language: LanguageSetting
     enterFullscreenOnStreamStart: boolean
     toggleFullscreenWithKeybind: boolean
     pageStyle: PageStyle
@@ -37,6 +46,9 @@ export type Settings = {
 }
 
 export type StreamCodec = "h264" | "auto" | "h265" | "av1"
+export type UpscalingRenderScale = "auto" | "75" | "67" | "50"
+/// "auto": the governor (upscale_governor.ts) picks the best level this device keeps up with
+export type UpscalingAlgorithm = "auto" | "fsr1" | "nis" | "sgsr" | "sharpen"
 export type TransportType = "auto" | "webrtc" | "websocket"
 
 import DEFAULT_SETTINGS from "../default_settings"
@@ -98,6 +110,9 @@ export function getLocalStreamSettings(defaultSettings: Settings) {
     if (settings?.pageStyle === "old") {
         settings.pageStyle = "moonlight"
     }
+    if (settings?.videoSize === "native") {
+        settings.videoSize = "full"
+    }
 
     return settings
 }
@@ -105,7 +120,19 @@ export function setLocalStreamSettings(settings?: Settings) {
     localStorage.setItem("mlSettings", JSON.stringify(settings))
 }
 
-export type StreamSettingsChangeListener = (event: ComponentEvent<StreamSettingsComponent>) => void
+function settingsGroup(parent: HTMLElement, title: string): HTMLElement {
+    const group = document.createElement("section")
+    group.classList.add("settings-group")
+
+    const header = document.createElement("h3")
+    header.innerText = title
+    group.appendChild(header)
+
+    parent.appendChild(group)
+    return group
+}
+
+export type StreamSettingsChangeListener =(event: ComponentEvent<StreamSettingsComponent>) => void
 
 function makeSettingsValid(permissions: StreamPermissions, settings: Settings) {
     if (permissions.maximum_bitrate_kbps != null && permissions.maximum_bitrate_kbps < settings.bitrate) {
@@ -150,7 +177,7 @@ export class StreamSettingsComponent implements Component {
 
     private streamHeader: HTMLHeadingElement = document.createElement("h3")
     private bitrate: InputComponent
-    private fps: InputComponent
+    private fps: SelectComponent
     private videoCodec: SelectComponent
     private forceVideoElementRenderer: InputComponent
     private canvasRenderer: InputComponent
@@ -160,6 +187,9 @@ export class StreamSettingsComponent implements Component {
     private videoSize: SelectComponent
     private videoSizeWidth: InputComponent
     private videoSizeHeight: InputComponent
+    private upscaling: InputComponent
+    private upscalingRenderScale: SelectComponent
+    private upscalingAlgorithm: SelectComponent
 
     private audioHeader: HTMLHeadingElement = document.createElement("h3")
     private playAudioLocal: InputComponent
@@ -241,11 +271,15 @@ export class StreamSettingsComponent implements Component {
         this.bitrate.addChangeListener(this.onSettingsChange.bind(this))
         this.bitrate.mount(this.divElement)
 
-        // Fps
-        this.fps = new InputComponent("fps", "number", i.fps, {
-            defaultValue: defaultSettings_.fps.toString(),
-            value: settings?.fps?.toString(),
-            step: "100"
+        // Fps (Lightning fork: the usual rates instead of a free number field)
+        const fps = (settings?.fps ?? defaultSettings_.fps).toString()
+        const fpsOptions = ["30", "60", "90", "120"]
+        if (!fpsOptions.includes(fps)) {
+            fpsOptions.push(fps)
+        }
+        this.fps = new SelectComponent("fps", fpsOptions.map(value => ({ value, name: value })), {
+            displayName: i.fps,
+            preSelectedOption: fps
         })
         this.fps.addChangeListener(this.onSettingsChange.bind(this))
         this.fps.mount(this.divElement)
@@ -253,16 +287,18 @@ export class StreamSettingsComponent implements Component {
         // Video Size
         this.videoSize = new SelectComponent("videoSize",
             [
+                { value: "auto", name: i.videoSizeAuto },
+                { value: "full", name: i.videoSizeFull },
+                { value: "safe", name: i.videoSizeSafe },
                 { value: "720p", name: "720p" },
                 { value: "1080p", name: "1080p" },
                 { value: "1440p", name: "1440p" },
-                { value: "4k", name: "4k" },
-                { value: "native", name: i.native },
+                { value: "4k", name: "4K" },
                 { value: "custom", name: i.custom }
             ],
             {
                 displayName: i.videoSize,
-                preSelectedOption: settings?.videoSize || defaultSettings_.videoSize
+                preSelectedOption: (settings?.videoSize == "native" ? "full" : settings?.videoSize) || defaultSettings_.videoSize
             }
         )
         this.videoSize.addChangeListener(this.onSettingsChange.bind(this))
@@ -282,9 +318,47 @@ export class StreamSettingsComponent implements Component {
         this.videoSizeHeight.addChangeListener(this.onSettingsChange.bind(this))
         this.videoSizeHeight.mount(this.divElement)
 
+        // Upscaling (Lightning fork): the host renders less, this device upscales
+        this.upscaling = new InputComponent("upscaling", "checkbox", i.upscaling, {
+            checked: settings?.upscaling ?? defaultSettings_.upscaling
+        })
+        this.upscaling.addChangeListener(this.onSettingsChange.bind(this))
+        this.upscaling.mount(this.divElement)
+
+        this.upscalingRenderScale = new SelectComponent("upscalingRenderScale",
+            [
+                { value: "auto", name: i.upscalingRenderScaleAuto },
+                { value: "75", name: "75%" },
+                { value: "67", name: "67%" },
+                { value: "50", name: "50%" },
+            ],
+            {
+                displayName: i.upscalingRenderScale,
+                preSelectedOption: settings?.upscalingRenderScale || defaultSettings_.upscalingRenderScale
+            }
+        )
+        this.upscalingRenderScale.addChangeListener(this.onSettingsChange.bind(this))
+        this.upscalingRenderScale.mount(this.divElement)
+
+        this.upscalingAlgorithm = new SelectComponent("upscalingAlgorithm",
+            [
+                { value: "auto", name: i.upscalingAuto },
+                { value: "fsr1", name: "FSR 1" },
+                { value: "nis", name: "NIS" },
+                { value: "sgsr", name: "SGSR" },
+                { value: "sharpen", name: i.upscalingSharpenOnly },
+            ],
+            {
+                displayName: i.upscalingAlgorithm,
+                preSelectedOption: settings?.upscalingAlgorithm || defaultSettings_.upscalingAlgorithm
+            }
+        )
+        this.upscalingAlgorithm.addChangeListener(this.onSettingsChange.bind(this))
+        this.upscalingAlgorithm.mount(this.divElement)
+
         // Codec
         const allowedVideoCodecs = [
-            { value: "auto", name: i.autoExperimental },
+            { value: "auto", name: i.codecAuto },
         ]
         if (this.permissions.allow_codec_h264) {
             allowedVideoCodecs.push(
@@ -470,9 +544,9 @@ export class StreamSettingsComponent implements Component {
             )
         }
 
-        this.language = new SelectComponent("language", getLanguageOptions(), {
+        this.language = new SelectComponent("language", getLanguageOptions(i.languageAuto), {
             displayName: i.language,
-            preSelectedOption: language
+            preSelectedOption: settings?.language ?? defaultSettings_.language
         })
         this.language.addChangeListener(this.onSettingsChange.bind(this))
         this.language.mount(this.divElement)
@@ -515,17 +589,52 @@ export class StreamSettingsComponent implements Component {
         this.useSelectElementPolyfill.addChangeListener(this.onSettingsChange.bind(this))
         this.useSelectElementPolyfill.mount(this.divElement)
 
+        // Lightning fork: three groups instead of one long list; the options people rarely
+        // touch fold away under "Advanced". Mounting again moves each element into its group.
+        for (const header of [this.sidebarHeader, this.streamHeader, this.audioHeader, this.mouseHeader, this.controllerHeader, this.otherHeader]) {
+            header.remove()
+        }
+        const quality = settingsGroup(this.divElement, i.groupQuality)
+        for (const component of [
+            this.videoSize, this.videoSizeWidth, this.videoSizeHeight, this.fps, this.bitrate,
+            this.upscaling, this.upscalingAlgorithm, this.upscalingRenderScale, this.videoCodec, this.hdr,
+        ]) {
+            component.mount(quality)
+        }
+        const controls = settingsGroup(this.divElement, i.groupControls)
+        for (const component of [
+            this.touchMode, this.mouseMode, this.localCursorSensitivity, this.controllerInvertAB, this.controllerInvertXY,
+        ]) {
+            component.mount(controls)
+        }
+        const advanced = document.createElement("details")
+        advanced.classList.add("settings-group", "settings-advanced")
+        const advancedSummary = document.createElement("summary")
+        advancedSummary.innerText = i.groupAdvanced
+        advanced.appendChild(advancedSummary)
+        this.divElement.appendChild(advanced)
+        for (const component of [
+            this.language, this.sidebarEdge, this.hideSidebarButton, this.enterFullscreenOnStreamStart,
+            this.toggleFullscreenWithKeybind, this.playAudioLocal, this.mouseScrollMode,
+            this.controllerSendIntervalOverride, this.dataTransport, this.forceVideoElementRenderer,
+            this.canvasRenderer, this.canvasVsync, this.pageStyle, this.useSelectElementPolyfill,
+        ]) {
+            component.mount(advanced)
+        }
+
         this.onSettingsChange()
     }
 
     private onSettingsChange() {
-        if (this.videoSize.getValue() == "custom") {
-            this.videoSizeWidth.setEnabled(true)
-            this.videoSizeHeight.setEnabled(true)
-        } else {
-            this.videoSizeWidth.setEnabled(false)
-            this.videoSizeHeight.setEnabled(false)
-        }
+        const custom = this.videoSize.getValue() == "custom"
+        this.videoSizeWidth.setEnabled(custom)
+        this.videoSizeHeight.setEnabled(custom)
+        this.videoSizeWidth.setVisible(custom)
+        this.videoSizeHeight.setVisible(custom)
+
+        const upscaling = this.upscaling.isChecked()
+        this.upscalingAlgorithm.setVisible(upscaling)
+        this.upscalingRenderScale.setVisible(upscaling)
 
         this.divElement.dispatchEvent(new ComponentEvent("ml-settingschange", this))
     }
@@ -543,12 +652,15 @@ export class StreamSettingsComponent implements Component {
         settings.sidebarEdge = this.sidebarEdge.getValue() as any
         settings.hideSidebarButton = this.hideSidebarButton.isChecked()
         settings.bitrate = parseInt(this.bitrate.getValue())
-        settings.fps = parseInt(this.fps.getValue())
+        settings.fps = parseInt(this.fps.getValue() ?? "60")
         settings.videoSize = this.videoSize.getValue() as any
         settings.videoSizeCustom = {
             width: parseInt(this.videoSizeWidth.getValue()),
             height: parseInt(this.videoSizeHeight.getValue())
         }
+        settings.upscaling = this.upscaling.isChecked()
+        settings.upscalingRenderScale = this.upscalingRenderScale.getValue() as any
+        settings.upscalingAlgorithm = this.upscalingAlgorithm.getValue() as any
         settings.videoCodec = this.videoCodec.getValue() as any
         settings.forceVideoElementRenderer = this.forceVideoElementRenderer.isChecked()
         settings.canvasRenderer = this.canvasRenderer.isChecked()
@@ -570,7 +682,7 @@ export class StreamSettingsComponent implements Component {
         }
 
         settings.dataTransport = this.dataTransport.getValue() as any
-        settings.language = this.language.getValue() as Language
+        settings.language = this.language.getValue() as LanguageSetting
 
         settings.enterFullscreenOnStreamStart = this.enterFullscreenOnStreamStart.isChecked()
         settings.toggleFullscreenWithKeybind = this.toggleFullscreenWithKeybind.isChecked()

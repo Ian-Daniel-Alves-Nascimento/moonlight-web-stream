@@ -135,6 +135,34 @@ pub struct GetHostResponse {
     pub host: DetailedHost,
 }
 
+/// What the client needs to know about the host's display to pick the resolution it asks for
+/// (Lightning fork). Only known when the host runs on the same machine as Moonlight Web.
+#[derive(Serialize, Deserialize, Debug, TS)]
+#[ts(export, export_to = EXPORT_PATH)]
+pub struct GetHostDisplayResponse {
+    /// The host is this machine (added as localhost / 127.0.0.1 / ::1).
+    pub local: bool,
+    /// Sunshine streams a virtual display that takes the resolution the client asks for.
+    /// `false`: it streams the physical monitor, which keeps its own resolution.
+    /// `null`: unknown (no Sunshine config configured, or the host is not local).
+    pub virtual_display: Option<bool>,
+    /// Current resolution of this machine's primary monitor (what Sunshine captures without a
+    /// virtual display).
+    pub primary_width: Option<u32>,
+    pub primary_height: Option<u32>,
+    /// Resolutions the virtual display offers (from the driver's settings file). The host
+    /// only switches the virtual display to one of these, so the client asks for the one with
+    /// its screen's shape instead of its exact size. Empty: unknown.
+    pub virtual_modes: Vec<DisplayMode>,
+}
+
+#[derive(Serialize, Deserialize, Debug, TS)]
+#[ts(export, export_to = EXPORT_PATH)]
+pub struct DisplayMode {
+    pub width: u32,
+    pub height: u32,
+}
+
 #[derive(Serialize, Deserialize, Debug, TS)]
 #[ts(export, export_to = EXPORT_PATH)]
 pub struct PostHostRequest {

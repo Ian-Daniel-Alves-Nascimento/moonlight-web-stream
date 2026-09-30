@@ -23,15 +23,46 @@ export function getTranslations(language: Language): Translations {
     return locales[language]
 }
 
+/// Lightning fork: the language setting can also be "auto" (follow the device), the default.
+export type LanguageSetting = Language | "auto"
+
 export function normalizeLanguage(language: unknown): Language {
-    if (language === "zh" || language === "zh-CN" || language === "zh_CN") {
+    if (language == null || language === "auto") {
+        return detectDeviceLanguage()
+    }
+    return matchLanguage(language) ?? "en"
+}
+
+function matchLanguage(language: unknown): Language | null {
+    if (typeof language != "string") {
+        return null
+    }
+    const code = language.toLowerCase().replace("_", "-")
+    if (code == "zh" || code.startsWith("zh-")) {
         return "zh-CN"
     }
-    if (language === "pt" || language === "pt-BR" || language === "pt_BR") {
+    if (code == "pt" || code.startsWith("pt-")) {
         return "pt-BR"
     }
-    if (language === "ko" || language === "ko-KR" || language === "ko_KR") {
+    if (code == "ko" || code.startsWith("ko-")) {
         return "ko-KR"
+    }
+    if (code == "fr" || code.startsWith("fr-")) {
+        return "fr-FR"
+    }
+    if (code == "en" || code.startsWith("en-")) {
+        return "en"
+    }
+    return null
+}
+
+function detectDeviceLanguage(): Language {
+    const languages = typeof navigator != "undefined" ? (navigator.languages ?? [navigator.language]) : []
+    for (const language of languages) {
+        const match = matchLanguage(language)
+        if (match) {
+            return match
+        }
     }
     return "en"
 }
@@ -57,6 +88,10 @@ export function adoptRoleDefaultLanguage(roleDefaultSettings: { language?: unkno
     if (hasStoredLanguage()) {
         return false
     }
+    // "auto" keeps following the device, nothing to pin locally
+    if (roleDefaultSettings?.language == null || roleDefaultSettings.language === "auto") {
+        return false
+    }
 
     const roleLanguage = normalizeLanguage(roleDefaultSettings?.language)
     if (roleLanguage === getCurrentLanguage()) {
@@ -74,8 +109,9 @@ export function adoptRoleDefaultLanguage(roleDefaultSettings: { language?: unkno
     }
 }
 
-export function getLanguageOptions(): Array<{ value: Language, name: string }> {
+export function getLanguageOptions(autoName: string): Array<{ value: LanguageSetting, name: string }> {
     return [
+        { value: "auto", name: autoName },
         { value: "en", name: "English" },
         { value: "zh-CN", name: "中文" },
         { value: "pt-BR", name: "Português (Brasil)" },

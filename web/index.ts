@@ -14,6 +14,7 @@ import { adoptRoleDefaultLanguage, getCurrentLanguage, getTranslations } from ".
 import { setTouchContextMenuEnabled } from "./polyfill/ios_right_click"
 import { buildUrl } from "./config_"
 import { setStyle as setPageStyle } from "./styles/index"
+import { ICON_ADD, ICON_ADMIN, ICON_BACK, ICON_EXIT, ICON_LOGIN, ICON_SETTINGS, setIconLabel } from "./component/icons"
 
 // TODO: look at this? https://developer.mozilla.org/en-US/docs/Web/API/Web_components
 
@@ -49,10 +50,17 @@ async function startApp() {
         app.setAppState(event.state, false)
     })
 
-    app.forceFetch()
+    const fetched = app.forceFetch()
 
-    if (lastAppState) {
+    // Lightning fork: ?view=settings opens the settings directly (the companion links here;
+    // "Back" then returns to it)
+    if (new URLSearchParams(location.search).get("view") == "settings") {
+        app.setAppState({ display: "settings" })
+    } else if (lastAppState) {
         app.setAppState(lastAppState)
+    } else {
+        // Lightning fork: with a single PC ready to play, go straight to its games
+        fetched.then(() => app.openOnlyHost())
     }
 }
 
@@ -126,6 +134,7 @@ class MainApp implements Component {
             window.location.reload()
         })
         this.logoutButton.classList.add("logout-button")
+        setIconLabel(this.logoutButton, ICON_EXIT, I.index.logout)
 
         this.loginButton.addEventListener("click", async () => {
             const success = await tryLogin()
@@ -134,23 +143,26 @@ class MainApp implements Component {
             }
         })
         this.loginButton.classList.add("login-button")
+        setIconLabel(this.loginButton, ICON_LOGIN, I.index.login)
 
         this.adminButton.addEventListener("click", async () => {
             window.location.href = buildUrl("/admin.html")
         })
         this.adminButton.classList.add("admin-button")
+        setIconLabel(this.adminButton, ICON_ADMIN, I.index.admin)
 
         // Actions
         this.actionElement.classList.add("actions-list")
 
         // Back button
-        this.backButton.innerText = I.index.back
+        setIconLabel(this.backButton, ICON_BACK, I.index.back)
         this.backButton.classList.add("button-fit-content")
         this.backButton.addEventListener("click", backAppState)
         this.backButton.dataset.variant = "back-button"
 
         // Host add button
         this.hostAddButton.classList.add("host-add")
+        setIconLabel(this.hostAddButton, ICON_ADD, I.index.addHost)
         this.hostAddButton.addEventListener("click", this.addHost.bind(this))
 
         // Host list
@@ -159,6 +171,7 @@ class MainApp implements Component {
 
         // Settings Button
         this.settingsButton.classList.add("open-settings")
+        setIconLabel(this.settingsButton, ICON_SETTINGS, I.index.settings)
         this.settingsButton.addEventListener("click", () => this.setCurrentDisplay("settings"))
 
         this.saveRoleDefaultsButton.innerText = I.settings.saveRoleDefaults
@@ -229,6 +242,18 @@ class MainApp implements Component {
             setContextMenu(event, {
                 elements
             })
+        }
+    }
+
+    /// Lightning fork: skip the one-card host list when there is a single PC ready to play.
+    openOnlyHost() {
+        if (this.currentDisplay != "hosts") {
+            return
+        }
+
+        const hosts = this.hostList.getHosts()
+        if (hosts.length == 1 && hosts[0].isReadyToOpen()) {
+            this.setCurrentDisplay("games", { hostId: hosts[0].getHostId() })
         }
     }
 

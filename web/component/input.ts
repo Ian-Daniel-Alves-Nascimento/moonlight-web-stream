@@ -25,6 +25,11 @@ export class ElementWithLabel implements Component {
     mountBefore(parent: HTMLElement, before: ElementWithLabel): void {
         parent.insertBefore(this.div, before.div)
     }
+
+    /// Lightning fork: hide options that don't apply (e.g. custom size when not "custom").
+    setVisible(visible: boolean) {
+        this.div.hidden = !visible
+    }
 }
 
 export type InputInit = {

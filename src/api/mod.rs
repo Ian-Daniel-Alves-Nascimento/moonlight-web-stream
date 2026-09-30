@@ -35,6 +35,7 @@ pub(super) mod bindings_ext;
 pub mod app;
 pub mod auth;
 pub mod host;
+pub mod lightning;
 pub mod role;
 pub mod settings;
 pub mod stream;
@@ -55,6 +56,7 @@ pub fn api_service() -> impl HttpServiceFactory {
             // -- Host
             list_hosts,
             get_host,
+            lightning::get_host_display,
             post_host,
             patch_host,
             wake_host,

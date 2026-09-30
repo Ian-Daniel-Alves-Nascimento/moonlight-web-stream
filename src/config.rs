@@ -23,6 +23,24 @@ pub struct Config {
     pub moonlight: MoonlightConfig,
     #[serde(default)]
     pub log: LogConfig,
+    #[serde(default)]
+    pub lightning: LightningConfig,
+}
+
+// -- Lightning Launcher integration (fork addition)
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct LightningConfig {
+    /// Path to the `sunshine.conf` of the Sunshine running on this machine. Tells the client
+    /// whether Sunshine streams a virtual display (which follows the requested resolution) or
+    /// the physical monitor (which keeps its own). Unset: the Lightning Launcher default
+    /// (`%LOCALAPPDATA%\LightningLauncher\Sunshine\config\sunshine.conf`) if it exists.
+    #[serde(default)]
+    pub sunshine_config_path: Option<String>,
+    /// Settings file of the virtual display driver: its resolutions are the only ones the
+    /// virtual display can switch to. Unset: `C:\VirtualDisplayDriver\vdd_settings.xml`.
+    #[serde(default)]
+    pub vdd_settings_path: Option<String>,
 }
 
 // -- Log

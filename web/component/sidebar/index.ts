@@ -12,6 +12,12 @@ const sidebarParent = document.getElementById("sidebar-parent")
 const sidebarButton = document.getElementById("sidebar-button")
 
 sidebarButton?.addEventListener("click", toggleSidebar)
+// Lightning fork: the menu is a panel over a dimmed stream; tapping outside it closes it
+sidebarParent?.addEventListener("click", event => {
+    if (event.target === sidebarParent) {
+        setSidebarExtended(false)
+    }
+})
 
 let sidebarComponent: Sidebar | null = null
 
@@ -39,8 +45,10 @@ export function setSidebarExtended(extended: boolean) {
 
     if (extended) {
         sidebarRoot?.classList.add("sidebar-show")
+        sidebarComponent?.extended()
     } else {
         sidebarRoot?.classList.remove("sidebar-show")
+        sidebarComponent?.unextend()
     }
     sidebarExtended = extended
 }

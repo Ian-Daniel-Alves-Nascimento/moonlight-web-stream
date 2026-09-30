@@ -76,6 +76,11 @@ export class Host implements Component {
         }
     }
 
+    /// Online and paired: a click opens its apps directly.
+    isReadyToOpen(): boolean {
+        return this.cache?.server_state != null && this.cache?.paired == "Paired"
+    }
+
     private async onClick(event: MouseEvent) {
         if (this.cache?.server_state == null) {
             this.onContextMenu(event)

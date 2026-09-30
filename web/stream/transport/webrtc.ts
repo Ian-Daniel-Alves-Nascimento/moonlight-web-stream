@@ -11,6 +11,27 @@ import { StatValue } from "../stats"
 import { TrackVideoRenderer, VideoRenderer } from "../video/index"
 import { generateControlPacketConfig, IControlStream, Transport, TransportAudioType, TransportConnectData, TransportOptions, TransportShutdown, TransportVideoType } from "./index"
 
+/// Lightning fork: how long (×100 ms) to wait for the first video packet to name the codec.
+const CODEC_STATS_TRIES = 30
+
+/// The video format for a WebRTC codec (mime type + fmtp line), or null for non-video payloads
+/// (rtx, red, ulpfec...).
+function videoFormatFromCodec(mimeType: string, sdpFmtpLine?: string): keyof VideoFormats | null {
+    const name = mimeType.toLowerCase().replace("video/", "")
+    const fmtp = (sdpFmtpLine ?? "").toLowerCase()
+
+    if (name == "h264") {
+        return fmtp.includes("profile-level-id=f4") ? "h264High8444" : "h264"
+    }
+    if (name == "h265" || name == "hevc") {
+        return /profile-id=2\b/.test(fmtp) ? "h265Main10" : "h265"
+    }
+    if (name == "av1") {
+        return /profile=1\b/.test(fmtp) ? "av1High8444" : "av1Main8"
+    }
+    return null
+}
+
 export class WebRTCTransport implements Transport {
 
     readonly implementationName: string = "webrtc"
@@ -297,27 +318,51 @@ export class WebRTCTransport implements Transport {
         }
     }
 
+    /// Lightning fork: this used to give up after 1 s without reading anything and always
+    /// answer "h264". Now: the codec of the incoming video in the WebRTC stats; before any
+    /// video arrives (or if none ever does, e.g. the host's encoder failed), the one the host
+    /// put in its answer.
     private async findOutCodec(): Promise<keyof VideoFormats> {
-        let tries = 0
-
-        while (true) {
+        for (let tries = 0; tries < CODEC_STATS_TRIES; tries++) {
             const stats = await this.peer.getStats()
             for (const [_key, value] of stats) {
-                // Video Stream
-                if ("type" in value && "kind" in value
-                    && value.type == "inbound-rtp" && value.kind == "video"
-                ) {
-
+                if (value.type == "inbound-rtp" && value.kind == "video" && value.codecId) {
+                    const codec = stats.get(value.codecId)
+                    const format = codec && videoFormatFromCodec(codec.mimeType, codec.sdpFmtpLine)
+                    if (format) {
+                        this.logger?.debug(`video codec in use: ${codec.mimeType} (${format})`)
+                        return format
+                    }
                 }
-            }
-            tries += 1
-            if (tries > 10) {
-                this.logger?.debug(`failed to determine codec using stats after ${tries} tries, assuming h264`)
-                return "h264"
             }
 
             await wait(100)
         }
+
+        const answered = this.remoteDescriptionVideoFormat()
+        this.logger?.debug(`video codec not in the stats yet, the host answered with ${answered ?? "nothing known (assuming h264)"}`)
+        return answered ?? "h264"
+    }
+
+    /// The video codec in the host's answer (the first one of its video section).
+    private remoteDescriptionVideoFormat(): keyof VideoFormats | null {
+        const sdp = this.peer.remoteDescription?.sdp ?? ""
+        const video = sdp.split(/\r?\nm=/).find(section => section.startsWith("m=video") || section.startsWith("video"))
+        if (!video) {
+            return null
+        }
+
+        const fmtp = new Map<string, string>()
+        for (const match of video.matchAll(/a=fmtp:(\d+) ([^\r\n]*)/g)) {
+            fmtp.set(match[1], match[2])
+        }
+        for (const match of video.matchAll(/a=rtpmap:(\d+) ([^/\r\n]+)\//g)) {
+            const format = videoFormatFromCodec(`video/${match[2]}`, fmtp.get(match[1]))
+            if (format) {
+                return format
+            }
+        }
+        return null
     }
 
     private lastTotalDecodeTime = 0

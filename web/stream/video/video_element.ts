@@ -4,6 +4,9 @@ import { Pipe, PipeInfo } from "../pipeline/index"
 import { addPipePassthrough } from "../pipeline/pipes"
 import { emptyVideoCodecs, } from "../video"
 import { getStreamRectCorrected, TrackVideoRenderer, UrlVideoRenderer, VideoRenderer, VideoRendererSetup } from "./index"
+import { UpscalingAlgorithm } from "../../component/settings_menu"
+import { Logger } from "../log"
+import { VideoUpscaler } from "./upscale"
 
 const VIDEO_DECODER_CODECS: Record<keyof VideoFormats, string> = {
     "h264": "avc1.42E01E",
@@ -66,6 +69,9 @@ export class VideoElementRenderer implements TrackVideoRenderer, VideoRenderer {
     private size: [number, number] | null = null
     private hdrEnabled: boolean = false
 
+    /// Lightning fork: draws the video through an upscaler on a canvas laid over it.
+    private upscaler: VideoUpscaler | null = null
+
     constructor() {
         this.videoElement.classList.add("video-stream")
         this.videoElement.preload = "none"
@@ -95,6 +101,9 @@ export class VideoElementRenderer implements TrackVideoRenderer, VideoRenderer {
         this.size = [setup.width, setup.height]
     }
     cleanup(): void {
+        this.upscaler?.destroy()
+        this.upscaler = null
+
         if (this.oldTrack) {
             this.stream.removeTrack(this.oldTrack)
         }
@@ -116,9 +125,30 @@ export class VideoElementRenderer implements TrackVideoRenderer, VideoRenderer {
 
     mount(parent: HTMLElement): void {
         parent.appendChild(this.videoElement)
+        this.upscaler?.mount()
     }
     unmount(parent: HTMLElement): void {
+        this.upscaler?.unmount()
         parent.removeChild(this.videoElement)
+    }
+
+    /// Lightning fork: upscale on this device. Returns false when it can't (no WebGL2, shader
+    /// failure); the plain video keeps showing.
+    enableUpscaling(algorithm: UpscalingAlgorithm, logger?: Logger): boolean {
+        this.upscaler?.destroy()
+        this.upscaler = VideoUpscaler.create(this.videoElement, algorithm, logger)
+        if (this.upscaler && this.videoElement.isConnected) {
+            this.upscaler.mount()
+        }
+        return this.upscaler != null
+    }
+    getUpscaler(): VideoUpscaler | null {
+        return this.upscaler
+    }
+    /// Back to the browser's own scaling of the <video>.
+    disableUpscaling() {
+        this.upscaler?.destroy()
+        this.upscaler = null
     }
 
     onUserInteraction(): void {

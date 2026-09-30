@@ -81,6 +81,14 @@ impl Host {
         self.id
     }
 
+    /// The address this host was added with.
+    pub async fn address(&self, user: &mut AuthenticatedUser) -> Result<String, AppError> {
+        self.can_use(user).await?;
+
+        let app = self.app.access()?;
+        Ok(self.storage_host(&app).await?.address)
+    }
+
     async fn can_use(&self, user: &mut AuthenticatedUser) -> Result<(), AppError> {
         let owner = self.owner().await?;
         if owner.is_none()
