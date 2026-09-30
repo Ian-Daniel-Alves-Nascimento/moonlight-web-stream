@@ -1130,3 +1130,17 @@ body.lt-video-safe .video-stream {
         animation: none !important;
     }
 }
+
+/* Source code link (GPL-3.0): small, fixed at the bottom of the hosts/settings screen */
+.lt-source-link {
+    position: fixed;
+    left: 50%;
+    bottom: max(8px, env(safe-area-inset-bottom));
+    transform: translateX(-50%);
+    font-size: 11px;
+    color: rgba(255, 255, 255, .45);
+    text-decoration: none;
+    white-space: nowrap;
+    z-index: 1;
+}
+.lt-source-link:hover, .lt-source-link:focus-visible { color: rgba(255, 255, 255, .8); text-decoration: underline; }

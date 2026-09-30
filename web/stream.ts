@@ -1,5 +1,6 @@
 import { Api, apiGetAppImage, apiGetApps, apiGetRole, getApi } from "./api"
 import { buildUrl } from "./config_"
+import { installFetchBridge, notifyParentExit } from "./ponte"
 import { iconButton, iconElement, ICON_BOLT, ICON_CHECK, ICON_CLOSE, ICON_ERROR, ICON_EXIT, ICON_FULLSCREEN, ICON_KEYBOARD, ICON_MENU, ICON_MOUSE, ICON_RETRY, ICON_ROTATE, ICON_SEND_KEY, ICON_STATS } from "./component/icons"
 import { DetailedRole, StreamKeys } from "./api_bindings"
 import { Component } from "./component/index"
@@ -35,6 +36,8 @@ const MENU_TAP_MAX_MS = 450
 const MENU_TAP_MAX_MOVE_PX = 30
 
 async function startApp() {
+    // Lightning fork: inside a same-origin page with ?ponte=1 the API goes through the parent (see ponte.ts)
+    installFetchBridge()
     const uniffiInit = uniffiInitAsync()
 
     const api = await getApi()
@@ -558,6 +561,9 @@ Upscaler: ${mode} ${upscaler.input[0]}x${upscaler.input[1]} -> ${upscaler.output
         if (!success) {
             console.debug("Failed to close stream correctly")
         }
+
+        // Embedded (ponte.ts): the parent page closes the player
+        if (notifyParentExit()) return
 
         if (history.length > 1) {
             history.back()

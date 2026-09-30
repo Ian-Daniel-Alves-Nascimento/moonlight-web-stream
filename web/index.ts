@@ -1,4 +1,5 @@
 import "./polyfill/index"
+import { installFetchBridge } from "./ponte"
 import { Api, getApi, apiPostHost, FetchError, apiLogout, apiGetUser, tryLogin, apiGetHost, apiGetRole, apiPatchRole } from "./api"
 import { AddHostModal } from "./component/host/add_modal"
 import { HostList } from "./component/host/list"
@@ -21,6 +22,8 @@ import { ICON_ADD, ICON_ADMIN, ICON_BACK, ICON_EXIT, ICON_LOGIN, ICON_SETTINGS, 
 let I = getTranslations(getCurrentLanguage())
 
 async function startApp() {
+    // Lightning fork: inside a same-origin page with ?ponte=1 the API goes through the parent (see ponte.ts)
+    installFetchBridge()
     setTouchContextMenuEnabled(true)
 
     const api = await getApi()

@@ -5,6 +5,18 @@ based on tag `v3.0.0-prerelease.7`. License: GPL-3.0-or-later (unchanged).
 
 Release tags of this fork use the form `v<upstream-version>-lightning.<n>`.
 
+## v3.0.0-prerelease.7-lightning.4 (2026-09-30)
+
+- Embedding bridge (`web/ponte.ts`): a page of the player opened with `?ponte=1` inside a
+  same-origin iframe sends its API requests (`<path_prefix>/api/...`) to the parent window with
+  `postMessage` instead of the network; the parent answers with the HTTP response (status,
+  headers and body in chunks). Static files and the WebRTC stream itself are unchanged. The
+  protocol is documented at the top of `web/ponte.ts`. Used by pages that already have their
+  own channel to the host (for example a WebRTC data channel).
+- Leaving the stream inside such an iframe tells the parent (`{ type: "lt-exit" }`) instead of
+  navigating back.
+- A small link to this source code (GPL-3.0) at the bottom of the hosts/settings page.
+
 ## v3.0.0-prerelease.7-lightning.3 (2026-09-29)
 
 - Depends on a fork of moonlight-common-rust with the AV1 negotiation:
