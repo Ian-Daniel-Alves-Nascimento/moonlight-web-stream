@@ -497,15 +497,36 @@ Upscaler: ${mode} ${upscaler.input[0]}x${upscaler.input[1]} -> ${upscaler.output
     /// Restarts the stream with upscaling turned on/off, when that changes the resolution the
     /// host has to render. The app keeps running on the PC; the new stream picks it up.
     reconnectWithUpscaling(choice: UpscalingAlgorithm | "off") {
-        this.exiting = true
-
         const url = new URL(location.href)
         url.searchParams.set("upscaling", String(choice != "off"))
         if (choice != "off") {
             url.searchParams.set("upscalingAlgorithm", choice)
         }
-        location.replace(url.toString())
+        this.restartStream(url.toString())
     }
+
+    /// Lightning fork: stop this stream on the host BEFORE the page loads a new one. Just
+    /// reloading left the old session alive for a while; Sunshine then had two sessions and
+    /// only applies the display mode for the first one, so a new resolution (upscaling on/off)
+    /// silently kept the old one.
+    async restartStream(url?: string) {
+        if (this.restarting) return
+        this.restarting = true
+        this.exiting = true
+        try {
+            await this.stream.stop()
+        } catch (e) {
+            console.debug("failed to stop the stream before restarting", e)
+        }
+        // Give the host a moment to close the session and revert the display
+        await new Promise(resolve => setTimeout(resolve, 1500))
+        if (url) {
+            location.replace(url)
+        } else {
+            location.reload()
+        }
+    }
+    private restarting = false
 
     /// Lightning fork: connected but no picture (e.g. the PC's encoder refused the resolution)
     /// used to be a silent black screen. Only the <video> renderer can tell; canvas ones skip it.
@@ -520,8 +541,7 @@ Upscaler: ${mode} ${upscaler.input[0]}x${upscaler.input[1]} -> ${upscaler.output
         const codec = this.stream.getVideoCodec()
         if (this.stream.usesAutoCodec() && codec && codec != "h264") {
             avoidCodec(codec)
-            this.exiting = true
-            location.reload()
+            this.restartStream()
             return
         }
 
@@ -1248,7 +1268,7 @@ class ConnectScreen implements Modal<void> {
         document.addEventListener("fullscreenchange", () => this.updateActions())
 
         this.retryButton = iconButton(ICON_RETRY, I.stream.retry, "lt-button-primary")
-        this.retryButton.addEventListener("click", () => location.reload())
+        this.retryButton.addEventListener("click", () => this.app.restartStream())
 
         this.exitButton = iconButton(ICON_EXIT, I.stream.exit, "lt-button-ghost")
         this.exitButton.addEventListener("click", () => this.app.exitStream())

@@ -1,5 +1,5 @@
 import "./polyfill/index"
-import { installFetchBridge } from "./ponte"
+import { installFetchBridge, notifyParentExit } from "./ponte"
 import { Api, getApi, apiPostHost, FetchError, apiLogout, apiGetUser, tryLogin, apiGetHost, apiGetRole, apiPatchRole } from "./api"
 import { AddHostModal } from "./component/host/add_modal"
 import { HostList } from "./component/host/list"
@@ -82,6 +82,11 @@ function setAppState(state: AppState, pushHistory: boolean) {
     }
 }
 function backAppState() {
+    // Lightning fork: settings opened directly inside an embedding page (?view=settings&ponte=1):
+    // there is nothing to go back to here, the embedding page closes the player
+    if (new URLSearchParams(location.search).get("view") == "settings" && notifyParentExit()) {
+        return
+    }
     history.back()
 }
 

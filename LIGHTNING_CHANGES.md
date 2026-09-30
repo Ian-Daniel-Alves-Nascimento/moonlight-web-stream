@@ -5,6 +5,20 @@ based on tag `v3.0.0-prerelease.7`. License: GPL-3.0-or-later (unchanged).
 
 Release tags of this fork use the form `v<upstream-version>-lightning.<n>`.
 
+## v3.0.0-prerelease.7-lightning.5 (2026-09-30)
+
+- Restarting the stream (turning upscaling on/off, the automatic codec fallback, "Try again")
+  now stops the current stream on the host first and waits a moment. Before, the page just
+  reloaded: the old session stayed alive, Sunshine had two sessions and only applies the
+  display mode for the first one, so the new resolution was silently not applied.
+- Settings opened directly inside an embedding page (`?view=settings&ponte=1`): "Back" tells
+  the parent to close the player (there is nothing to go back to inside the iframe).
+- Settings page on phones: one row per setting with a hairline between rows, full-width
+  selects, on/off switches, number + slider rows; compact header; no logout button (the user is
+  given by the forwarded header); the source code link sits after the settings.
+- In-stream menu: blurred backdrop, spring entrance, staggered tiles, press feedback, icon
+  pills, selected option pops; two columns on phones held sideways. Honors reduced motion.
+
 ## v3.0.0-prerelease.7-lightning.4 (2026-09-30)
 
 - Embedding bridge (`web/ponte.ts`): a page of the player opened with `?ponte=1` inside a
