@@ -478,7 +478,8 @@ fn get_video_formats(sdp: &Session) -> HashMap<VideoFormat, RTCRtpCodecParameter
                     match value {
                         "0" => profile_formats = [VideoFormat::Av1Main8, VideoFormat::Av1Main10],
                         "1" => {
-                            profile_formats = [VideoFormat::Av1High8_444, VideoFormat::Av1High10_444]
+                            profile_formats =
+                                [VideoFormat::Av1High8_444, VideoFormat::Av1High10_444]
                         }
                         _ => debug!(profile = ?value, "unknown av1 profile"),
                     }

@@ -85,7 +85,9 @@ fn vdd_resolutions(xml: &str) -> Vec<DisplayMode> {
 
         if width > 0
             && height > 0
-            && !modes.iter().any(|mode| mode.width == width && mode.height == height)
+            && !modes
+                .iter()
+                .any(|mode| mode.width == width && mode.height == height)
         {
             modes.push(DisplayMode { width, height });
         }
