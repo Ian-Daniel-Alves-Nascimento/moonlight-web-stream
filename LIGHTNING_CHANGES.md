@@ -5,6 +5,13 @@ based on tag `v3.0.0-prerelease.7`. License: GPL-3.0-or-later (unchanged).
 
 Release tags of this fork use the form `v<upstream-version>-lightning.<n>`.
 
+## v3.0.0-prerelease.7-lightning.6 (2026-10-01)
+
+- Controllers: the standard-mapping table had the face buttons swapped (b, a, y, x), so every
+  controller came out with A<->B and X<->Y inverted. Indices 0-3 now map to A, B, X, Y
+  (bottom, right, left, top; Xbox layout like the Moonlight protocol). The "invert A/B" and
+  "invert X/Y" settings still work on top of it.
+
 ## v3.0.0-prerelease.7-lightning.5 (2026-09-30)
 
 - Restarting the stream (turning upscaling on/off, the automatic codec fallback, "Try again")

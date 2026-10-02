@@ -8,11 +8,14 @@ export type ControllerConfig = {
 }
 
 // https://w3c.github.io/gamepad/#remapping
+// Lightning fork: indices 0-3 of the standard mapping are bottom, right, left and top face
+// buttons, which Moonlight calls A, B, X and Y (Xbox layout, A_FLAG = 0x1000). Upstream had
+// them as b, a, y, x, so every controller came out with A<->B and X<->Y swapped.
 const STANDARD_BUTTONS: Array<keyof ControllerButtons | null> = [
-    "b",
     "a",
-    "y",
+    "b",
     "x",
+    "y",
     "lb",
     "rb",
     // These are triggers
