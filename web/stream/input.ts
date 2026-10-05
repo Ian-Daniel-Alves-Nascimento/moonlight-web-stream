@@ -111,6 +111,8 @@ export class StreamInput {
         this.streamSize = desktopSize
 
         this.capabilities = capabilities
+        // Lightning fork: the on-screen controller first, so it is player 1 when it is the only one
+        this.registerTouchGamepad()
         this.registerBufferedControllers()
     }
 
@@ -932,6 +934,8 @@ export class StreamInput {
     }
 
     // TODO: look at the controller code again
+    // Lightning fork: the on-screen controller takes a slot too, with gamepadIndex = -1 (it is
+    // not a browser gamepad, so the polling below skips it)
     private gamepads: Array<{ gamepadIndex: number, oldState: GamepadState } | null> = []
     private gamepadRumbleInterval: number | null = null
 
@@ -963,8 +967,9 @@ export class StreamInput {
             this.gamepadRumbleInterval = window.setInterval(this.onGamepadRumbleInterval.bind(this), CONTROLLER_RUMBLE_INTERVAL_MS - 10)
         }
 
-        // Reset rumble
-        this.gamepadRumbleCurrent[0] = { lowFrequencyMotor: 0, highFrequencyMotor: 0, leftTrigger: 0, rightTrigger: 0 }
+        // Reset rumble (Lightning fork: of this gamepad; upstream reset index 0 only, and the
+        // first rumble for any other gamepad then threw)
+        this.gamepadRumbleCurrent[gamepad.index] = { lowFrequencyMotor: 0, highFrequencyMotor: 0, leftTrigger: 0, rightTrigger: 0 }
 
         let capabilities: ControllerCapabilities = {
             analogTriggers: false,
@@ -1000,7 +1005,9 @@ export class StreamInput {
             }
         }
 
-        this.sendControllerAdd(this.gamepads.length - 1, SUPPORTED_BUTTONS, capabilities)
+        // Lightning fork: the slot just taken (upstream sent the last one, wrong when a freed
+        // slot was reused)
+        this.sendControllerAdd(id, SUPPORTED_BUTTONS, capabilities)
 
         if (gamepad.mapping != "standard") {
             showNotification(`Unable to read values of gamepad with mapping ${gamepad.mapping}`, "warn")
@@ -1009,10 +1016,8 @@ export class StreamInput {
     onGamepadDisconnect(event: GamepadEvent) {
         const index = this.gamepads.findIndex(value => value?.gamepadIndex == event.gamepad.index)
         if (index != -1) {
-            const id = this.gamepads[index]?.gamepadIndex
-            if (id != null) {
-                this.sendControllerRemove(id)
-            }
+            // Lightning fork: the controller number is the slot, not the browser's gamepad index
+            this.sendControllerRemove(index)
 
             this.gamepads[index] = null
         }
@@ -1030,8 +1035,9 @@ export class StreamInput {
 
         for (let gamepadId = 0; gamepadId < this.gamepads.length; gamepadId++) {
             const oldGamepadState = this.gamepads[gamepadId]
-            if (oldGamepadState == null) {
-                return
+            if (oldGamepadState == null || oldGamepadState.gamepadIndex < 0) {
+                // Lightning fork: skip (upstream returned, so gamepads after an empty slot froze)
+                continue
             }
             const gamepad = navigator.getGamepads()[oldGamepadState.gamepadIndex]
             if (!gamepad) {
@@ -1060,8 +1066,13 @@ export class StreamInput {
             const lowFrequencyMotor = packet.inner.lowFrequency / U16_MAX
             const highFrequencyMotor = packet.inner.highFrequency / U16_MAX
 
+            if (id === this.touchGamepadId) {
+                this.touchGamepadRumble?.(Math.max(lowFrequencyMotor, highFrequencyMotor))
+                return
+            }
+
             const gamepadIndex = this.gamepads[id]?.gamepadIndex
-            if (gamepadIndex == null) {
+            if (gamepadIndex == null || gamepadIndex < 0) {
                 return
             }
 
@@ -1073,7 +1084,7 @@ export class StreamInput {
             const rightTrigger = packet.inner.rightTriggerMotor / U16_MAX
 
             const gamepadIndex = this.gamepads[id]?.gamepadIndex
-            if (gamepadIndex == null) {
+            if (gamepadIndex == null || gamepadIndex < 0) {
                 return
             }
 
@@ -1092,6 +1103,9 @@ export class StreamInput {
 
     private setGamepadEffect(id: number, _ty: "dual-rumble" | "trigger-rumble", params: { lowFrequencyMotor: number, highFrequencyMotor: number } | { leftTrigger: number, rightTrigger: number }) {
         const rumble = this.gamepadRumbleCurrent[id]
+        if (!rumble) {
+            return
+        }
 
         Object.assign(rumble, params)
     }
@@ -1165,6 +1179,69 @@ export class StreamInput {
 
                 actuator.pulse(average, CONTROLLER_RUMBLE_INTERVAL_MS)
             }
+        }
+    }
+
+    // -- On-screen controller (Lightning fork, see touch_gamepad.ts)
+    private touchGamepadId: number | null = null
+    private touchGamepadWanted = false
+    private touchGamepadCanRumble = false
+    private touchGamepadRumble: ((level: number) => void) | null = null
+    private touchGamepadLast: GamepadState = emptyGamepadState()
+
+    /// Plugs the on-screen controller in as one more player controller (or unplugs it). Before
+    /// the stream connects this is remembered and done on connect.
+    setTouchGamepadConnected(connected: boolean, canRumble: boolean = false) {
+        this.touchGamepadWanted = connected
+        this.touchGamepadCanRumble = canRumble
+        if (!this.connected) {
+            return
+        }
+
+        if (connected && this.touchGamepadId == null) {
+            let id = this.gamepads.findIndex(value => value == null)
+            if (id == -1) {
+                id = this.gamepads.length
+                this.gamepads.push(null)
+            }
+            this.gamepads[id] = { gamepadIndex: -1, oldState: emptyGamepadState() }
+            this.touchGamepadId = id
+            this.touchGamepadLast = emptyGamepadState()
+            this.sendControllerAdd(id, SUPPORTED_BUTTONS, {
+                analogTriggers: true,
+                rumble: canRumble,
+                triggerRumble: false,
+                touchpad: false,
+                accel: false,
+                gyro: false,
+                batteryState: false,
+                rgbLed: false
+            })
+        } else if (!connected && this.touchGamepadId != null) {
+            const id = this.touchGamepadId
+            this.sendController(id, emptyGamepadState())
+            this.sendControllerRemove(id)
+            this.gamepads[id] = null
+            this.touchGamepadId = null
+        }
+    }
+    isTouchGamepadConnected(): boolean {
+        return this.touchGamepadId != null
+    }
+    /// The game's rumble for the on-screen controller, 0..1
+    setTouchGamepadRumbleListener(listener: ((level: number) => void) | null) {
+        this.touchGamepadRumble = listener
+    }
+    sendTouchGamepadState(state: GamepadState) {
+        this.touchGamepadLast = state
+        if (this.touchGamepadId != null) {
+            this.sendController(this.touchGamepadId, state)
+        }
+    }
+    private registerTouchGamepad() {
+        if (this.touchGamepadWanted && this.touchGamepadId == null) {
+            this.setTouchGamepadConnected(true, this.touchGamepadCanRumble)
+            this.sendTouchGamepadState(this.touchGamepadLast)
         }
     }
 

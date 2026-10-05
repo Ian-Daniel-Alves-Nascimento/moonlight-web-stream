@@ -1,4 +1,5 @@
 import { ControllerConfig } from "../stream/gamepad"
+import { TouchGamepadLayout, TouchGamepadLook } from "../stream/touch_gamepad"
 import { MouseMode, MouseScrollMode, TouchMode } from "../stream/input"
 import { PageStyle } from "../styles/index"
 import { getLanguageOptions, getTranslations, LanguageSetting, normalizeLanguage } from "../i18n"
@@ -36,6 +37,17 @@ export type Settings = {
     touchMode: TouchMode
     localCursorSensitivity: number
     controllerConfig: ControllerConfig
+    /// Lightning fork: the on-screen controller (stream/touch_gamepad.ts)
+    touchGamepad: TouchGamepadMode
+    touchGamepadLayout: TouchGamepadLayout
+    /// percent
+    touchGamepadSize: number
+    /// percent
+    touchGamepadOpacity: number
+    touchGamepadLook: TouchGamepadLook
+    touchGamepadLookSensitivity: number
+    touchGamepadHaptics: boolean
+    touchGamepadSprintAtEdge: boolean
     dataTransport: TransportType
     language: LanguageSetting
     enterFullscreenOnStreamStart: boolean
@@ -50,6 +62,8 @@ export type UpscalingRenderScale = "auto" | "75" | "67" | "50"
 /// "auto": the governor (upscale_governor.ts) picks the best level this device keeps up with
 export type UpscalingAlgorithm = "auto" | "fsr1" | "nis" | "sgsr" | "sharpen"
 export type TransportType = "auto" | "webrtc" | "websocket"
+/// "auto": phones and tablets, while no real controller is connected
+export type TouchGamepadMode = "auto" | "always" | "off"
 
 import DEFAULT_SETTINGS from "../default_settings"
 
@@ -118,6 +132,10 @@ export function getLocalStreamSettings(defaultSettings: Settings) {
 }
 export function setLocalStreamSettings(settings?: Settings) {
     localStorage.setItem("mlSettings", JSON.stringify(settings))
+}
+
+function clampNumber(value: number, min: number, max: number, fallback: number): number {
+    return Number.isFinite(value) ? Math.max(min, Math.min(max, value)) : fallback
 }
 
 function settingsGroup(parent: HTMLElement, title: string): HTMLElement {
@@ -204,6 +222,15 @@ export class StreamSettingsComponent implements Component {
     private controllerInvertAB: InputComponent
     private controllerInvertXY: InputComponent
     private controllerSendIntervalOverride: InputComponent
+
+    private touchGamepad: SelectComponent
+    private touchGamepadLayout: SelectComponent
+    private touchGamepadSize: InputComponent
+    private touchGamepadOpacity: InputComponent
+    private touchGamepadLook: SelectComponent
+    private touchGamepadLookSensitivity: InputComponent
+    private touchGamepadHaptics: InputComponent
+    private touchGamepadSprintAtEdge: InputComponent
 
     private otherHeader: HTMLHeadingElement = document.createElement("h3")
     private dataTransport: SelectComponent
@@ -525,6 +552,79 @@ export class StreamSettingsComponent implements Component {
             this.controllerInvertXY.setEnabled(false)
         }
 
+        // On-screen controller (Lightning fork)
+        this.touchGamepad = new SelectComponent("touchGamepad", [
+            { value: "auto", name: i.touchGamepadAuto },
+            { value: "always", name: i.touchGamepadAlways },
+            { value: "off", name: i.touchGamepadOff },
+        ], {
+            displayName: i.touchGamepad,
+            preSelectedOption: settings?.touchGamepad ?? defaultSettings_.touchGamepad
+        })
+        this.touchGamepad.addChangeListener(this.onSettingsChange.bind(this))
+        this.touchGamepad.mount(this.divElement)
+
+        this.touchGamepadLayout = new SelectComponent("touchGamepadLayout", [
+            { value: "standard", name: i.touchGamepadLayoutStandard },
+            { value: "action", name: i.touchGamepadLayoutAction },
+            { value: "retro", name: i.touchGamepadLayoutRetro },
+            { value: "racing", name: i.touchGamepadLayoutRacing },
+        ], {
+            displayName: i.touchGamepadLayout,
+            preSelectedOption: settings?.touchGamepadLayout ?? defaultSettings_.touchGamepadLayout
+        })
+        this.touchGamepadLayout.addChangeListener(this.onSettingsChange.bind(this))
+        this.touchGamepadLayout.mount(this.divElement)
+
+        this.touchGamepadSize = new InputComponent("touchGamepadSize", "number", i.touchGamepadSize, {
+            defaultValue: defaultSettings_.touchGamepadSize.toString(),
+            value: settings?.touchGamepadSize?.toString(),
+            step: "5",
+            numberSlider: { range_min: 80, range_max: 130 }
+        })
+        this.touchGamepadSize.addChangeListener(this.onSettingsChange.bind(this))
+        this.touchGamepadSize.mount(this.divElement)
+
+        this.touchGamepadOpacity = new InputComponent("touchGamepadOpacity", "number", i.touchGamepadOpacity, {
+            defaultValue: defaultSettings_.touchGamepadOpacity.toString(),
+            value: settings?.touchGamepadOpacity?.toString(),
+            step: "5",
+            numberSlider: { range_min: 20, range_max: 100 }
+        })
+        this.touchGamepadOpacity.addChangeListener(this.onSettingsChange.bind(this))
+        this.touchGamepadOpacity.mount(this.divElement)
+
+        this.touchGamepadLook = new SelectComponent("touchGamepadLook", [
+            { value: "stick", name: i.touchGamepadLookStick },
+            { value: "touchpad", name: i.touchGamepadLookTouchpad },
+        ], {
+            displayName: i.touchGamepadLook,
+            preSelectedOption: settings?.touchGamepadLook ?? defaultSettings_.touchGamepadLook
+        })
+        this.touchGamepadLook.addChangeListener(this.onSettingsChange.bind(this))
+        this.touchGamepadLook.mount(this.divElement)
+
+        this.touchGamepadLookSensitivity = new InputComponent("touchGamepadLookSensitivity", "number", i.touchGamepadLookSensitivity, {
+            defaultValue: defaultSettings_.touchGamepadLookSensitivity.toString(),
+            value: settings?.touchGamepadLookSensitivity?.toString(),
+            step: "0.1",
+            numberSlider: { range_min: 0.5, range_max: 2 }
+        })
+        this.touchGamepadLookSensitivity.addChangeListener(this.onSettingsChange.bind(this))
+        this.touchGamepadLookSensitivity.mount(this.divElement)
+
+        this.touchGamepadHaptics = new InputComponent("touchGamepadHaptics", "checkbox", i.touchGamepadHaptics, {
+            checked: settings?.touchGamepadHaptics ?? defaultSettings_.touchGamepadHaptics
+        })
+        this.touchGamepadHaptics.addChangeListener(this.onSettingsChange.bind(this))
+        this.touchGamepadHaptics.mount(this.divElement)
+
+        this.touchGamepadSprintAtEdge = new InputComponent("touchGamepadSprintAtEdge", "checkbox", i.touchGamepadSprintAtEdge, {
+            checked: settings?.touchGamepadSprintAtEdge ?? defaultSettings_.touchGamepadSprintAtEdge
+        })
+        this.touchGamepadSprintAtEdge.addChangeListener(this.onSettingsChange.bind(this))
+        this.touchGamepadSprintAtEdge.mount(this.divElement)
+
         // Other
         this.otherHeader.innerText = i.other
         this.divElement.appendChild(this.otherHeader)
@@ -603,6 +703,8 @@ export class StreamSettingsComponent implements Component {
         }
         const controls = settingsGroup(this.divElement, i.groupControls)
         for (const component of [
+            this.touchGamepad, this.touchGamepadLayout, this.touchGamepadSize, this.touchGamepadOpacity,
+            this.touchGamepadLook, this.touchGamepadLookSensitivity, this.touchGamepadHaptics, this.touchGamepadSprintAtEdge,
             this.touchMode, this.mouseMode, this.localCursorSensitivity, this.controllerInvertAB, this.controllerInvertXY,
         ]) {
             component.mount(controls)
@@ -635,6 +737,18 @@ export class StreamSettingsComponent implements Component {
         const upscaling = this.upscaling.isChecked()
         this.upscalingAlgorithm.setVisible(upscaling)
         this.upscalingRenderScale.setVisible(upscaling)
+
+        // The controller's options only while it can show; the camera options only where they apply
+        const gamepad = this.touchGamepad.getValue() != "off"
+        const layout = this.touchGamepadLayout.getValue()
+        const look = layout == "action" || (layout == "standard" && this.touchGamepadLook.getValue() == "touchpad")
+        this.touchGamepadLayout.setVisible(gamepad)
+        this.touchGamepadSize.setVisible(gamepad)
+        this.touchGamepadOpacity.setVisible(gamepad)
+        this.touchGamepadLook.setVisible(gamepad && layout == "standard")
+        this.touchGamepadLookSensitivity.setVisible(gamepad && look)
+        this.touchGamepadHaptics.setVisible(gamepad)
+        this.touchGamepadSprintAtEdge.setVisible(gamepad && (layout == "standard" || layout == "action"))
 
         this.divElement.dispatchEvent(new ComponentEvent("ml-settingschange", this))
     }
@@ -680,6 +794,15 @@ export class StreamSettingsComponent implements Component {
         } else {
             settings.controllerConfig.sendIntervalOverride = null
         }
+
+        settings.touchGamepad = (this.touchGamepad.getValue() ?? "auto") as TouchGamepadMode
+        settings.touchGamepadLayout = (this.touchGamepadLayout.getValue() ?? "standard") as TouchGamepadLayout
+        settings.touchGamepadSize = clampNumber(parseInt(this.touchGamepadSize.getValue()), 80, 130, 100)
+        settings.touchGamepadOpacity = clampNumber(parseInt(this.touchGamepadOpacity.getValue()), 20, 100, 60)
+        settings.touchGamepadLook = (this.touchGamepadLook.getValue() ?? "stick") as TouchGamepadLook
+        settings.touchGamepadLookSensitivity = clampNumber(parseFloat(this.touchGamepadLookSensitivity.getValue()), 0.5, 2, 1)
+        settings.touchGamepadHaptics = this.touchGamepadHaptics.isChecked()
+        settings.touchGamepadSprintAtEdge = this.touchGamepadSprintAtEdge.isChecked()
 
         settings.dataTransport = this.dataTransport.getValue() as any
         settings.language = this.language.getValue() as LanguageSetting

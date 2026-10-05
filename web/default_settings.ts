@@ -45,6 +45,20 @@ const trueDefaultSettings: Settings =
         // possible values: null or a number, example: 60, 120
         "sendIntervalOverride": null
     },
+    // Lightning fork: on-screen controller. possible values: "auto" (phones and tablets, while no
+    // real controller is connected), "always", "off"
+    "touchGamepad": "auto",
+    // possible values: "standard", "action", "retro", "racing"
+    "touchGamepadLayout": "standard",
+    // percent
+    "touchGamepadSize": 100,
+    // percent: how visible the controls are while idle
+    "touchGamepadOpacity": 60,
+    // possible values: "stick", "touchpad" (standard layout's right side)
+    "touchGamepadLook": "stick",
+    "touchGamepadLookSensitivity": 1,
+    "touchGamepadHaptics": true,
+    "touchGamepadSprintAtEdge": false,
     // possible values: "auto", "webrtc", "websocket" (Lightning fork: "auto" = WebRTC only)
     "dataTransport": "auto",
     // "auto" follows the device language (Lightning fork)

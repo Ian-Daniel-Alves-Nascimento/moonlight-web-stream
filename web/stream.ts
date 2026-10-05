@@ -8,7 +8,7 @@ import { SelectComponent } from "./component/input"
 import { FormModal } from "./component/modal/form"
 import { getModalBackground, Modal, showMessage, showModal } from "./component/modal/index"
 import { showNotification } from "./component/notification"
-import { getLocalStreamSettings, Settings, TransportType, UpscalingAlgorithm } from "./component/settings_menu"
+import { getLocalStreamSettings, Settings, TouchGamepadMode, TransportType, UpscalingAlgorithm } from "./component/settings_menu"
 import { getSidebarRoot, setSidebar, setSidebarExtended, setSidebarStyle, Sidebar } from "./component/sidebar/index"
 import { adoptRoleDefaultLanguage, getCurrentLanguage, getTranslations, Language, normalizeLanguage } from "./i18n"
 import { requestKeyboardLock } from "./iframe"
@@ -17,6 +17,8 @@ import { KeyboardModeEvent, KeyboardModeWillChangeEvent, ScreenKeyboard, TextEve
 import { InfoEvent, Stream, StreamCapabilities, StreamFailure, StreamStage } from "./stream/index"
 import { defaultStreamInputConfig, MouseMode, ScreenKeyboardSetVisibleEvent, StreamInputConfig } from "./stream/input"
 import { emptyKeyModifiers } from "./stream/keyboard"
+import { emptyGamepadState, GamepadState } from "./stream/gamepad"
+import { PAD, TouchGamepad, TouchGamepadLayout, TouchGamepadOptions, TouchGamepadState } from "./stream/touch_gamepad"
 import { streamStatsToText } from "./stream/stats"
 import { physicalScreenSize } from "./stream/upscaling"
 import { avoidCodec, codecDisplayName } from "./stream/codec"
@@ -223,6 +225,16 @@ class ViewerApp implements Component {
 
     private hasShownFullscreenEscapeWarning = false
 
+    // -- On-screen controller (Lightning fork, stream/touch_gamepad.ts)
+    private touchGamepad: TouchGamepad | null = null
+    private touchGamepadMode: TouchGamepadMode = "auto"
+    private touchGamepadOptions: Partial<TouchGamepadOptions> = {}
+    /// "off" or a layout: what the menu shows and what shows once connected
+    touchGamepadChoice: string = "off"
+    /// Picked in the menu: shows even with a real controller plugged in
+    private touchGamepadForced = false
+    private streamConnected = false
+
     constructor(api: Api, hostId: number, appId: number, bootstrapRole: DetailedRole, options?: Partial<Settings>) {
         this.api = api
 
@@ -244,6 +256,18 @@ class ViewerApp implements Component {
         })
 
         this.upscalingChoice = settings.upscaling ? settings.upscalingAlgorithm : "off"
+
+        this.touchGamepadMode = settings.touchGamepad ?? "auto"
+        this.touchGamepadOptions = {
+            layout: settings.touchGamepadLayout ?? "standard",
+            size: (settings.touchGamepadSize ?? 100) / 100,
+            opacity: (settings.touchGamepadOpacity ?? 60) / 100,
+            look: settings.touchGamepadLook ?? "stick",
+            lookSensitivity: settings.touchGamepadLookSensitivity ?? 1,
+            haptics: settings.touchGamepadHaptics ?? true,
+            sprintAtEdge: settings.touchGamepadSprintAtEdge ?? false,
+        }
+        this.touchGamepadChoice = touchGamepadAutoShows(this.touchGamepadMode) ? (this.touchGamepadOptions.layout ?? "standard") : "off"
 
         // Configure sidebar
         this.sidebar = new ViewerSidebar(this)
@@ -402,8 +426,14 @@ Upscaler: ${mode} ${upscaler.input[0]}x${upscaler.input[1]} -> ${upscaler.output
 
             document.title = appName
             this.sidebar.setTitle(appName)
+        } else if (data.type == "failure") {
+            this.streamConnected = false
+            this.updateTouchGamepad()
         } else if (data.type == "connectionComplete") {
             this.sidebar.onCapabilitiesChange(data.capabilities)
+
+            this.streamConnected = true
+            this.updateTouchGamepad()
 
             this.armFullscreenOnNextInteraction()
             setTimeout(this.checkVideoArrived.bind(this), NO_VIDEO_TIMEOUT_MS)
@@ -860,9 +890,80 @@ Upscaler: ${mode} ${upscaler.input[0]}x${upscaler.input[1]} -> ${upscaler.output
     }
     onGamepadAdd(gamepad: Gamepad) {
         this.stream.getInput().onGamepadConnect(gamepad)
+
+        // Lightning fork: a real controller takes over from the on-screen one
+        const hadTouchGamepad = this.touchGamepad != null
+        this.updateTouchGamepad()
+        if (hadTouchGamepad && this.touchGamepad == null) {
+            showNotification(I.stream.gamepadPhysical)
+        }
     }
     onGamepadDisconnect(event: GamepadEvent) {
         this.stream.getInput().onGamepadDisconnect(event)
+        this.updateTouchGamepad()
+    }
+
+    // -- On-screen controller (Lightning fork)
+    /// Shows or hides it: the menu's choice, only while connected and, unless picked in the menu
+    /// or set to "always", only while no real controller is plugged in.
+    private updateTouchGamepad() {
+        const physical = this.touchGamepadMode != "always" && !this.touchGamepadForced && hasPhysicalGamepad()
+        const show = this.streamConnected && this.touchGamepadChoice != "off" && !physical
+        const input = this.stream.getInput()
+        if (!show) {
+            if (this.touchGamepad) {
+                this.touchGamepad.destroy()
+                this.touchGamepad = null
+                input.setTouchGamepadRumbleListener(null)
+                input.setTouchGamepadConnected(false)
+            }
+            return
+        }
+        const layout = this.touchGamepadChoice as TouchGamepadLayout
+        if (this.touchGamepad) {
+            if (this.touchGamepad.getOptions().layout != layout) {
+                this.touchGamepad.setOptions({ layout })
+            }
+            this.touchGamepad.setCollapsed(false)
+            return
+        }
+        const pad = new TouchGamepad(document.body, {
+            onState: state => input.sendTouchGamepadState(touchToGamepadState(state)),
+            onInteraction: phase => {
+                if (phase == "up") {
+                    this.onUserInteraction()
+                    this.consumeAutoFullscreenInteraction()
+                }
+            },
+            onExtra: id => {
+                if (id == "menu") {
+                    setSidebarExtended(true)
+                } else if (id == "hide") {
+                    this.touchGamepad?.setCollapsed(true)
+                }
+            },
+        }, {
+            ...this.touchGamepadOptions,
+            layout,
+            extraButtons: [
+                { id: "hide", label: I.stream.gamepadHide, side: "left", svg: SVG_EYE_OFF },
+                { id: "menu", label: I.stream.gamepadMenu, side: "right", svg: SVG_MORE },
+            ],
+            texts: { gas: I.stream.gamepadGas, brake: I.stream.gamepadBrake, show: I.stream.gamepadShow },
+        })
+        this.touchGamepad = pad
+        input.setTouchGamepadRumbleListener(level => this.touchGamepad?.rumble(level))
+        input.setTouchGamepadConnected(true, pad.canRumble())
+    }
+    /// From the menu: "off" or a layout. Remembered for the next streams.
+    setTouchGamepadChoice(choice: string) {
+        this.touchGamepadChoice = choice
+        this.touchGamepadForced = choice != "off"
+        if (choice != "off") {
+            this.touchGamepadOptions.layout = choice as TouchGamepadLayout
+        }
+        rememberTouchGamepadChoice(choice)
+        this.updateTouchGamepad()
     }
     onGamepadUpdate() {
         window.requestAnimationFrame(this.onGamepadUpdate.bind(this))
@@ -1403,6 +1504,68 @@ class ConnectScreen implements Modal<void> {
 }
 
 /// Lightning fork: the upscaler picked in the in-game menu is also the one next streams start with.
+/// Lightning fork: the menu's on-screen controller choice becomes the default for the next
+/// streams. Picking a layout where "auto" would not show one (a laptop) makes it "always".
+function rememberTouchGamepadChoice(choice: string) {
+    try {
+        const stored = JSON.parse(localStorage.getItem("mlSettings") ?? "{}")
+        if (choice == "off") {
+            stored.touchGamepad = "off"
+        } else {
+            stored.touchGamepadLayout = choice
+            stored.touchGamepad = stored.touchGamepad == "always" || !touchGamepadAutoShows("auto") ? "always" : "auto"
+        }
+        localStorage.setItem("mlSettings", JSON.stringify(stored))
+    } catch {
+        // Storage unavailable: only this stream changes
+    }
+}
+
+function touchGamepadAutoShows(mode: TouchGamepadMode): boolean {
+    return mode == "always" || (mode == "auto" && hasTouchScreen() && !hasFinePointer())
+}
+
+function hasPhysicalGamepad(): boolean {
+    try {
+        return Array.from(navigator.getGamepads?.() ?? []).some(gamepad => gamepad != null && gamepad.connected)
+    } catch {
+        return false
+    }
+}
+
+/// The on-screen controller speaks XInput (Y up); the stream's controller state is the browser's
+/// Gamepad API (Y down), which sendController flips back.
+function touchToGamepadState(touch: TouchGamepadState): GamepadState {
+    const state = emptyGamepadState()
+    const flags = state.buttonFlags
+    const b = touch.buttons
+    flags.a = (b & PAD.A) != 0
+    flags.b = (b & PAD.B) != 0
+    flags.x = (b & PAD.X) != 0
+    flags.y = (b & PAD.Y) != 0
+    flags.up = (b & PAD.UP) != 0
+    flags.down = (b & PAD.DOWN) != 0
+    flags.left = (b & PAD.LEFT) != 0
+    flags.right = (b & PAD.RIGHT) != 0
+    flags.lb = (b & PAD.LB) != 0
+    flags.rb = (b & PAD.RB) != 0
+    flags.play = (b & PAD.START) != 0
+    flags.back = (b & PAD.BACK) != 0
+    flags.lsClk = (b & PAD.LS) != 0
+    flags.rsClk = (b & PAD.RS) != 0
+    flags.special = (b & PAD.GUIDE) != 0
+    state.leftTrigger = touch.lt
+    state.rightTrigger = touch.rt
+    state.leftStickX = touch.lx
+    state.leftStickY = -touch.ly
+    state.rightStickX = touch.rx
+    state.rightStickY = -touch.ry
+    return state
+}
+
+const SVG_EYE_OFF = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18"/><path d="M10.6 5.1A9.8 9.8 0 0 1 12 5c5 0 9 4.5 10 7a13.4 13.4 0 0 1-3.1 4.2M6.5 6.6A13.2 13.2 0 0 0 2 12c1 2.5 5 7 10 7a9.6 9.6 0 0 0 4.3-1"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>`
+const SVG_MORE = `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>`
+
 function rememberUpscalingChoice(choice: UpscalingAlgorithm | "off") {
     try {
         const stored = JSON.parse(localStorage.getItem("mlSettings") ?? "{}")
@@ -1500,6 +1663,7 @@ class ViewerSidebar implements Component, Sidebar {
     private resolutionCaption = document.createElement("p")
     private touchMode: SegmentedChoice
     private mouseMode: SegmentedChoice
+    private touchGamepad: SegmentedChoice
 
     constructor(app: ViewerApp) {
         this.app = app
@@ -1620,6 +1784,18 @@ class ViewerSidebar implements Component, Sidebar {
         const imageSection = this.addSection(I.stream.sectionImage, this.upscaling)
         this.resolutionCaption.classList.add("lt-menu-caption")
         imageSection.appendChild(this.resolutionCaption)
+
+        // On-screen controller (Lightning fork): off or a layout, switched live
+        this.touchGamepad = new SegmentedChoice("touchGamepad", [
+            { value: "off", name: I.stream.gamepadOff },
+            { value: "standard", name: I.stream.gamepadStandard },
+            { value: "action", name: I.stream.gamepadAction },
+            { value: "retro", name: I.stream.gamepadRetro },
+            { value: "racing", name: I.stream.gamepadRacing },
+        ], this.app.touchGamepadChoice, value => this.app.setTouchGamepadChoice(value))
+        if (hasTouchScreen()) {
+            this.addSection(I.stream.sectionGamepad, this.touchGamepad)
+        }
 
         // Touch and mouse: only the ones this device has
         this.touchMode = new SegmentedChoice("touchMode", [

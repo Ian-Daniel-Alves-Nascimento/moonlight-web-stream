@@ -5,6 +5,29 @@ based on tag `v3.0.0-prerelease.7`. License: GPL-3.0-or-later (unchanged).
 
 Release tags of this fork use the form `v<upstream-version>-lightning.<n>`.
 
+## v3.0.0-prerelease.7-lightning.7 (2026-10-04)
+
+- On-screen controller (`web/stream/touch_gamepad.ts`, new, self-contained): an Xbox controller
+  drawn over the game on phones and tablets, plugged in as one more player controller. Built for
+  a screen that can't be felt: floating sticks born under the thumb whose base follows an
+  overshooting thumb, small dead zone plus an "anti dead zone" (the first millimetres already
+  move the game), face buttons with a larger touch area than drawn that roll from one to the
+  next and press two at once between them, 8-way D-pad, double-tap a stick for L3/R3, a tick on
+  every press and at the stick's rim (Vibration API; on iOS 17.4–26.4 the switch-control
+  haptic), the game's rumble on Android. Four layouts: standard, action (drag to look; RT fires
+  and aims), retro (floating D-pad) and racing (sliding steering, analog pedals by thumb
+  height). Settings: mode (automatic on phones/tablets, always, off), layout, size,
+  visibility, camera (stick or drag), camera sensitivity, haptics, L3 when the stick is held
+  at its rim. The in-stream menu switches it live and remembers the choice; a real controller
+  hides it; it collapses into a small button to use the touch modes.
+- Controllers (upstream bugs): a gamepad reusing a freed slot was announced with the wrong
+  number; disconnecting announced the browser's gamepad index instead of the slot; polling
+  stopped at the first empty slot; rumble for any gamepad but the first threw.
+- Audio: the stream starts with sound when the browser allows it (it always started muted and
+  waited for a tap, so playing with a controller stayed silent); otherwise a hint asks for one
+  tap. Coming back from the background revives the audio element and resumes a suspended or
+  interrupted AudioContext.
+
 ## v3.0.0-prerelease.7-lightning.6 (2026-10-01)
 
 - Controllers: the standard-mapping table had the face buttons swapped (b, a, y, x), so every

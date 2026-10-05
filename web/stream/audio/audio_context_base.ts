@@ -40,15 +40,35 @@ export abstract class AudioContextBasePipe implements NodeAudioPlayer {
             })
         }
 
+        // Lightning fork: iOS suspends ("interrupted") the context in the background, on a call
+        // or when another app takes the audio, and never resumes it by itself -> no sound
+        document.addEventListener("visibilitychange", this.resumeContext)
+        window.addEventListener("pageshow", this.resumeContext)
+        this.audioContext.addEventListener("statechange", this.resumeContext)
+        this.resumeContext()
+
         if (this.base && "setup" in this.base && typeof this.base.setup == "function") {
             return this.base.setup(...arguments)
         }
     }
+    private resumeContext = () => {
+        const ctx = this.audioContext
+        if (!ctx || document.visibilityState != "visible") return
+        // "interrupted" is Safari-only and not in the TS types
+        if ((ctx.state as string) != "running" && (ctx.state as string) != "closed") {
+            ctx.resume().catch(() => { })
+        }
+    }
+
     cleanup(): void {
+        document.removeEventListener("visibilitychange", this.resumeContext)
+        window.removeEventListener("pageshow", this.resumeContext)
+        this.audioContext?.removeEventListener("statechange", this.resumeContext)
         this.audioContext?.close()
     }
 
     onUserInteraction(): void {
+        this.resumeContext()
         if (this.base && "onUserInteraction" in this.base && typeof this.base.onUserInteraction == "function") {
             return this.base.onUserInteraction(...arguments)
         }
