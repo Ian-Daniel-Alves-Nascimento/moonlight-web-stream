@@ -1513,3 +1513,20 @@ body.lt-video-safe .video-stream {
 @keyframes lt-audio-hint-pulse {
     50% { box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45), 0 0 0 6px rgba(255, 255, 255, 0.08); }
 }
+
+/* Lightning fork: the failure's code (LT-3xx), tap to copy for support */
+.lt-connect-code {
+    min-height: 0;
+    margin: 8px 0 0;
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(255, 255, 255, 0.06);
+    color: inherit;
+    font: 600 12px/1.4 ui-monospace, "SF Mono", Consolas, monospace;
+    letter-spacing: 0.02em;
+    opacity: 0.85;
+}
+.lt-connect-code:hover:not(:disabled) {
+    transform: none;
+}

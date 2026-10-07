@@ -14,7 +14,7 @@ import { adoptRoleDefaultLanguage, getCurrentLanguage, getTranslations, Language
 import { requestKeyboardLock } from "./iframe"
 import "./polyfill/index"
 import { KeyboardModeEvent, KeyboardModeWillChangeEvent, ScreenKeyboard, TextEvent } from "./screen_keyboard"
-import { InfoEvent, Stream, StreamCapabilities, StreamFailure, StreamStage } from "./stream/index"
+import { InfoEvent, Stream, StreamCapabilities, STREAM_FAILURE_CODES, StreamFailure, StreamStage } from "./stream/index"
 import { defaultStreamInputConfig, MouseMode, ScreenKeyboardSetVisibleEvent, StreamInputConfig } from "./stream/input"
 import { emptyKeyModifiers } from "./stream/keyboard"
 import { emptyGamepadState, GamepadState } from "./stream/gamepad"
@@ -1288,6 +1288,8 @@ class ConnectScreen implements Modal<void> {
     private problem = document.createElement("div")
     private problemTitle = document.createElement("h3")
     private problemText = document.createElement("p")
+    /// Lightning fork: the failure's code (LT-3xx), tap to copy it for support
+    private problemCode = document.createElement("button")
 
     private cancelButton: HTMLButtonElement
     private fullscreenButton: HTMLButtonElement
@@ -1356,7 +1358,18 @@ class ConnectScreen implements Modal<void> {
         this.problem.classList.add("lt-connect-problem")
         this.problem.hidden = true
         const problemText = document.createElement("div")
-        problemText.append(this.problemTitle, this.problemText)
+        this.problemCode.type = "button"
+        this.problemCode.classList.add("lt-connect-code")
+        this.problemCode.addEventListener("click", async () => {
+            const code = this.problemCode.dataset.code ?? ""
+            try {
+                await navigator.clipboard.writeText(code)
+                this.problemCode.innerText = I.stream.errorCodeCopied(code)
+            } catch {
+                // No clipboard here: the code stays on screen to be read out
+            }
+        })
+        problemText.append(this.problemTitle, this.problemText, this.problemCode)
         this.problem.append(iconElement(ICON_ERROR), problemText)
         body.appendChild(this.problem)
 
@@ -1439,9 +1452,14 @@ class ConnectScreen implements Modal<void> {
             noVideo: I.stream.failNoVideo,
             ended: I.stream.endedHint,
             generic: I.stream.failGeneric,
+            hostNotPaired: I.stream.failHostNotPaired,
+            server: I.stream.failServer,
         }
         this.problemTitle.innerText = ended ? I.stream.endedTitle : I.stream.failedTitle
         this.problemText.innerText = messages[reason]
+        const code = STREAM_FAILURE_CODES[reason]
+        this.problemCode.dataset.code = code
+        this.problemCode.innerText = I.stream.errorCode(code)
         this.problem.hidden = false
 
         const retryLabel = this.retryButton.querySelector(".lt-button-label")

@@ -47,11 +47,39 @@ export type InfoEventListener = (event: InfoEvent) => void
 /// "video" = connected, building the video/audio pipelines.
 export type StreamStage = "network" | "starting" | "video"
 /// Lightning fork: why the stream couldn't start (or stopped), in terms a player can act on.
-export type StreamFailure = "noDirectPath" | "codec" | "host" | "timeout" | "noVideo" | "ended" | "generic"
+export type StreamFailure = "noDirectPath" | "codec" | "host" | "hostNotPaired" | "server" | "timeout" | "noVideo" | "ended" | "generic"
+
+/// Lightning fork: a code per failure, shown to the player so support can tell them apart
+/// (catalog: CODIGOS_DE_ERRO.md in the launcher repository). LT-3xx = the stream itself.
+export const STREAM_FAILURE_CODES: Record<StreamFailure, string> = {
+    noDirectPath: "LT-301",
+    codec: "LT-302",
+    host: "LT-303",
+    hostNotPaired: "LT-304",
+    server: "LT-305",
+    timeout: "LT-306",
+    noVideo: "LT-307",
+    ended: "LT-308",
+    generic: "LT-399",
+}
 
 /// The host answers an offer it has no common video codec with using a bare 400.
 function isCodecError(error: unknown): boolean {
     return error instanceof FetchError && error.getResponse()?.status == 400
+}
+
+/// Lightning fork: why the player's server refused or never answered the stream request.
+///   400 codec · 403/404 the PC isn't paired/registered in the player · no answer or a gateway
+///   error: the player's server on the PC is down · anything else: Sunshine refused
+function hostFailure(error: unknown): StreamFailure {
+    if (!(error instanceof FetchError)) {
+        return "host"
+    }
+    const status = error.getResponse()?.status
+    if (status == 400) return "codec"
+    if (status == 403 || status == 404) return "hostNotPaired"
+    if (status == null || status == 502 || status == 503 || status == 504) return "server"
+    return "host"
 }
 
 export function getStreamerSize(settings: Settings, viewerScreenSize: [number, number]): [number, number] {
@@ -227,6 +255,7 @@ export class Stream implements Component {
         }
         this.failureSent = true
 
+        this.debugLog(`Failure ${STREAM_FAILURE_CODES[reason]} (${reason})`)
         const event: InfoEvent = new CustomEvent("stream-info", { detail: { type: "failure", reason } })
         this.eventTarget.dispatchEvent(event)
     }
@@ -469,8 +498,15 @@ export class Stream implements Component {
 
         this.debugLog("Trying WebRTC transport")
 
-        // Get configuration
-        const config = await apiWebRTCConfiguration(this.api)
+        // Get configuration (Lightning fork: no answer = the player's server on the PC is down)
+        let config
+        try {
+            config = await apiWebRTCConfiguration(this.api)
+        } catch (error) {
+            this.debugLog(`couldn't reach the player's server: ${error}`)
+            this.dispatchFailure(hostFailure(error) == "host" ? "server" : hostFailure(error))
+            return "failednoconnect"
+        }
 
         // Probe the network first with a data-channel-only connection. The host never starts
         // streaming for it, so a network that cannot connect directly doesn't wake Sunshine.
@@ -522,7 +558,7 @@ export class Stream implements Component {
             await transport.setAnswer(answer)
         } catch (error) {
             this.debugLog(`failed to connect using webrtc because ${error}`)
-            this.dispatchFailure(isCodecError(error) ? "codec" : "host")
+            this.dispatchFailure(hostFailure(error))
 
             await transport.close()
             return "failednoconnect"

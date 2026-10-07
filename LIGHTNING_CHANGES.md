@@ -5,7 +5,13 @@ based on tag `v3.0.0-prerelease.7`. License: GPL-3.0-or-later (unchanged).
 
 Release tags of this fork use the form `v<upstream-version>-lightning.<n>`.
 
-## Unreleased (next: lightning.8)
+## v3.0.0-prerelease.7-lightning.8 (2026-10-06)
+
+- Error codes: every stream failure shows a code (LT-301 ... LT-399) on the failure screen, tap to
+  copy, and in the log, so support can tell the causes apart. "The host refused" is now split by
+  the player server's answer: Sunshine refused (LT-303), the PC isn't paired/registered in the
+  player (LT-304), the player's server on the PC doesn't answer (LT-305). Failing to fetch the
+  WebRTC configuration now reports LT-305 instead of leaving the connect screen spinning.
 
 - Auto HDR (`web/stream/video/auto_hdr.ts`, new): on an HDR screen, an SDR stream is shown with
   HDR highlights. A WebGPU canvas in "extended" tone mapping mode is laid over the picture (or
