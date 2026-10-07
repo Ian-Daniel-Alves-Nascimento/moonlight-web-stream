@@ -5,6 +5,20 @@ based on tag `v3.0.0-prerelease.7`. License: GPL-3.0-or-later (unchanged).
 
 Release tags of this fork use the form `v<upstream-version>-lightning.<n>`.
 
+## Unreleased (next: lightning.8)
+
+- Auto HDR (`web/stream/video/auto_hdr.ts`, new): on an HDR screen, an SDR stream is shown with
+  HDR highlights. A WebGPU canvas in "extended" tone mapping mode is laid over the picture (or
+  over the upscaler, which hands it each frame): content below a knee is left unchanged, the
+  highlights above it rise smoothly up to 1.8x / 2.6x / 3.6x SDR white (light / medium / strong),
+  and large bright areas rise less than small ones, so a white menu doesn't glare while a lamp
+  or a reflection shines. Measured why a real HDR stream doesn't help on iPhone: Safari 26's
+  decoder hands WebCodecs/WebGPU an 8-bit SDR frame with the highlights already compressed.
+  Only on screens reporting `dynamic-range: high` whose browser accepts the extended mode (iOS
+  26 Safari, Chrome on Android or desktop with HDR); never on a real HDR stream. Setting
+  `autoHdr` (default "medium") and a live choice in the in-stream menu, remembered.
+- Dev dependency: `@webgpu/types` (BSD-3-Clause), type declarations only.
+
 ## v3.0.0-prerelease.7-lightning.7 (2026-10-04)
 
 - On-screen controller (`web/stream/touch_gamepad.ts`, new, self-contained): an Xbox controller

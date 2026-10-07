@@ -7,6 +7,7 @@ import { getStreamRectCorrected, TrackVideoRenderer, UrlVideoRenderer, VideoRend
 import { UpscalingAlgorithm } from "../../component/settings_menu"
 import { Logger } from "../log"
 import { VideoUpscaler } from "./upscale"
+import { AutoHdr, AutoHdrStrength } from "./auto_hdr"
 
 const VIDEO_DECODER_CODECS: Record<keyof VideoFormats, string> = {
     "h264": "avc1.42E01E",
@@ -71,6 +72,8 @@ export class VideoElementRenderer implements TrackVideoRenderer, VideoRenderer {
 
     /// Lightning fork: draws the video through an upscaler on a canvas laid over it.
     private upscaler: VideoUpscaler | null = null
+    /// Lightning fork: HDR highlights over the picture (or over the upscaler), see auto_hdr.ts
+    private autoHdr: AutoHdr | null = null
 
     constructor() {
         this.videoElement.classList.add("video-stream")
@@ -103,6 +106,8 @@ export class VideoElementRenderer implements TrackVideoRenderer, VideoRenderer {
     cleanup(): void {
         this.upscaler?.destroy()
         this.upscaler = null
+        this.autoHdr?.destroy()
+        this.autoHdr = null
 
         if (this.oldTrack) {
             this.stream.removeTrack(this.oldTrack)
@@ -126,8 +131,10 @@ export class VideoElementRenderer implements TrackVideoRenderer, VideoRenderer {
     mount(parent: HTMLElement): void {
         parent.appendChild(this.videoElement)
         this.upscaler?.mount()
+        this.placeAutoHdr()
     }
     unmount(parent: HTMLElement): void {
+        this.autoHdr?.unmount()
         this.upscaler?.unmount()
         parent.removeChild(this.videoElement)
     }
@@ -140,6 +147,7 @@ export class VideoElementRenderer implements TrackVideoRenderer, VideoRenderer {
         if (this.upscaler && this.videoElement.isConnected) {
             this.upscaler.mount()
         }
+        this.placeAutoHdr()
         return this.upscaler != null
     }
     getUpscaler(): VideoUpscaler | null {
@@ -149,6 +157,59 @@ export class VideoElementRenderer implements TrackVideoRenderer, VideoRenderer {
     disableUpscaling() {
         this.upscaler?.destroy()
         this.upscaler = null
+        this.placeAutoHdr()
+    }
+
+    /// Lightning fork: HDR highlights on an HDR screen. False when this device can't.
+    async enableAutoHdr(strength: AutoHdrStrength, logger?: Logger): Promise<boolean> {
+        if (this.autoHdr) {
+            this.autoHdr.setStrength(strength)
+            return true
+        }
+        const autoHdr = await AutoHdr.create(this.videoElement, strength, logger)
+        if (!autoHdr) {
+            return false
+        }
+        // Another call finished first while this one waited for the GPU: keep that one
+        const current = this.autoHdr as AutoHdr | null
+        if (current) {
+            autoHdr.destroy()
+            current.setStrength(strength)
+            return true
+        }
+        this.autoHdr = autoHdr
+        this.placeAutoHdr()
+        return true
+    }
+    disableAutoHdr() {
+        this.autoHdr?.destroy()
+        this.autoHdr = null
+        if (this.upscaler) {
+            this.upscaler.onRendered = null
+        }
+    }
+    getAutoHdr(): AutoHdr | null {
+        return this.autoHdr
+    }
+    /// Above everything that draws the picture: the video, then the upscaler's canvas. With the
+    /// upscaler on, Auto HDR takes each frame from it.
+    private placeAutoHdr() {
+        const autoHdr = this.autoHdr
+        if (!autoHdr) {
+            return
+        }
+        const upscaler = this.upscaler
+        if (upscaler) {
+            upscaler.onRendered = canvas => autoHdr.renderFrom(canvas)
+            autoHdr.setUpscaledSource(() => upscaler.isShowing() ? upscaler.canvas : null)
+        } else {
+            autoHdr.setUpscaledSource(null)
+        }
+        if (!this.videoElement.isConnected) {
+            return
+        }
+        autoHdr.unmount()
+        autoHdr.mount(upscaler?.canvas.isConnected ? upscaler.canvas : this.videoElement)
     }
 
     onUserInteraction(): void {

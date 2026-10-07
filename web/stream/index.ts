@@ -19,6 +19,7 @@ import { allVideoCodecs, andVideoCodecs, emptyVideoCodecs, hasAnyCodec } from ".
 import { VideoRenderer, VideoRendererSetup } from "./video/index"
 import { VideoElementRenderer } from "./video/video_element"
 import { UpscalerStats } from "./video/upscale"
+import { AutoHdrStrength } from "./video/auto_hdr"
 import { buildVideoPipeline, queryVideoPipelineInfo, VideoPipelineOptions } from "./video/pipeline"
 import { GetHostDisplayResponse, StreamPermissions } from "../api_bindings"
 
@@ -289,6 +290,41 @@ export class Stream implements Component {
         const ok = renderer.enableUpscaling(choice, this.logger)
         Reflect.set(globalThis, "__lightningUpscaler", renderer.getUpscaler()?.stats ?? null)
         this.debugLog(ok ? `Upscaling: ${choice} active` : "Upscaling: WebGL2 unavailable, showing the plain video")
+        return ok
+    }
+
+    /// Lightning fork: HDR highlights on an HDR screen over an SDR stream (video/auto_hdr.ts).
+    /// A real HDR stream is left alone.
+    private enableAutoHdr(renderer: VideoRenderer) {
+        const choice = this.settings.autoHdr ?? "medium"
+        if (choice == "off") {
+            return
+        }
+        if (this.settings.hdr) {
+            this.debugLog("Auto HDR: not applied to an HDR stream")
+            return
+        }
+        if (!(renderer instanceof VideoElementRenderer)) {
+            this.debugLog(`Auto HDR: not available with the ${renderer.implementationName} renderer`)
+            return
+        }
+        renderer.enableAutoHdr(choice, this.logger).then(ok => {
+            this.debugLog(ok ? `Auto HDR: ${choice}` : "Auto HDR: this screen or browser can't show HDR")
+        })
+    }
+    /// Lightning fork: switch Auto HDR while streaming (sidebar).
+    async setAutoHdr(choice: AutoHdrStrength | "off"): Promise<boolean> {
+        const renderer = this.videoRenderer
+        if (!(renderer instanceof VideoElementRenderer)) {
+            return false
+        }
+        if (choice == "off") {
+            renderer.disableAutoHdr()
+            this.debugLog("Auto HDR: off")
+            return true
+        }
+        const ok = await renderer.enableAutoHdr(choice, this.logger)
+        this.debugLog(ok ? `Auto HDR: ${choice}` : "Auto HDR: this screen or browser can't show HDR")
         return ok
     }
 
@@ -701,6 +737,7 @@ export class Stream implements Component {
 
             videoRenderer.mount(this.divElement)
             this.enableUpscaling(videoRenderer)
+            this.enableAutoHdr(videoRenderer)
 
             await videoRenderer.setup(videoSetup)
             await this.transport.setVideoPipeline("videotrack", videoRenderer)

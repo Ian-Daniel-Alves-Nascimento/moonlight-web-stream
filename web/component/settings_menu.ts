@@ -1,5 +1,6 @@
 import { ControllerConfig } from "../stream/gamepad"
 import { TouchGamepadLayout, TouchGamepadLook } from "../stream/touch_gamepad"
+import { AutoHdrStrength } from "../stream/video/auto_hdr"
 import { MouseMode, MouseScrollMode, TouchMode } from "../stream/input"
 import { PageStyle } from "../styles/index"
 import { getLanguageOptions, getTranslations, LanguageSetting, normalizeLanguage } from "../i18n"
@@ -54,6 +55,9 @@ export type Settings = {
     toggleFullscreenWithKeybind: boolean
     pageStyle: PageStyle
     hdr: boolean
+    /// Lightning fork: HDR highlights on an HDR screen over an SDR stream (only where the screen
+    /// and the browser can show them)
+    autoHdr: AutoHdrStrength | "off"
     useSelectElementPolyfill: boolean
 }
 
@@ -224,6 +228,7 @@ export class StreamSettingsComponent implements Component {
     private controllerSendIntervalOverride: InputComponent
 
     private touchGamepad: SelectComponent
+    private autoHdr: SelectComponent
     private touchGamepadLayout: SelectComponent
     private touchGamepadSize: InputComponent
     private touchGamepadOpacity: InputComponent
@@ -552,6 +557,19 @@ export class StreamSettingsComponent implements Component {
             this.controllerInvertXY.setEnabled(false)
         }
 
+        // Auto HDR (Lightning fork)
+        this.autoHdr = new SelectComponent("autoHdr", [
+            { value: "medium", name: i.autoHdrMedium },
+            { value: "low", name: i.autoHdrLow },
+            { value: "high", name: i.autoHdrHigh },
+            { value: "off", name: i.autoHdrOff },
+        ], {
+            displayName: i.autoHdr,
+            preSelectedOption: settings?.autoHdr ?? defaultSettings_.autoHdr ?? "medium"
+        })
+        this.autoHdr.addChangeListener(this.onSettingsChange.bind(this))
+        this.autoHdr.mount(this.divElement)
+
         // On-screen controller (Lightning fork)
         this.touchGamepad = new SelectComponent("touchGamepad", [
             { value: "auto", name: i.touchGamepadAuto },
@@ -697,7 +715,7 @@ export class StreamSettingsComponent implements Component {
         const quality = settingsGroup(this.divElement, i.groupQuality)
         for (const component of [
             this.videoSize, this.videoSizeWidth, this.videoSizeHeight, this.fps, this.bitrate,
-            this.upscaling, this.upscalingAlgorithm, this.upscalingRenderScale, this.videoCodec, this.hdr,
+            this.upscaling, this.upscalingAlgorithm, this.upscalingRenderScale, this.videoCodec, this.autoHdr, this.hdr,
         ]) {
             component.mount(quality)
         }
@@ -813,6 +831,7 @@ export class StreamSettingsComponent implements Component {
         settings.pageStyle = this.pageStyle.getValue() as any
 
         settings.hdr = this.hdr.isChecked()
+        settings.autoHdr = (this.autoHdr.getValue() ?? "medium") as AutoHdrStrength | "off"
 
         settings.useSelectElementPolyfill = this.useSelectElementPolyfill.isChecked()
 

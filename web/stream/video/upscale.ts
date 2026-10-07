@@ -66,6 +66,8 @@ export class VideoUpscaler {
 
     readonly canvas = document.createElement("canvas")
     readonly stats: UpscalerStats
+    /// Lightning fork: called right after each upscaled frame is drawn (Auto HDR takes it from here)
+    onRendered: ((canvas: HTMLCanvasElement) => void) | null = null
 
     private gl: WebGL2RenderingContext
     private vao: WebGLVertexArrayObject
@@ -211,6 +213,11 @@ export class VideoUpscaler {
         this.canvas.remove()
     }
 
+    /// Drawing over the video right now ("auto" may have turned it off for a while)
+    isShowing(): boolean {
+        return this.running && this.canvas.isConnected && this.canvas.style.visibility != "hidden"
+    }
+
     destroy() {
         this.unmount()
 
@@ -255,6 +262,9 @@ export class VideoUpscaler {
 
         try {
             this.render()
+            if (this.isShowing()) {
+                this.onRendered?.(this.canvas)
+            }
         } catch (error) {
             if (!this.renderErrorLogged) {
                 this.renderErrorLogged = true

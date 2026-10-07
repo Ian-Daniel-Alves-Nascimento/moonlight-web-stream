@@ -19,6 +19,7 @@ import { defaultStreamInputConfig, MouseMode, ScreenKeyboardSetVisibleEvent, Str
 import { emptyKeyModifiers } from "./stream/keyboard"
 import { emptyGamepadState, GamepadState } from "./stream/gamepad"
 import { PAD, TouchGamepad, TouchGamepadLayout, TouchGamepadOptions, TouchGamepadState } from "./stream/touch_gamepad"
+import { AutoHdrStrength, autoHdrSupported } from "./stream/video/auto_hdr"
 import { streamStatsToText } from "./stream/stats"
 import { physicalScreenSize } from "./stream/upscaling"
 import { avoidCodec, codecDisplayName } from "./stream/codec"
@@ -198,6 +199,8 @@ class ViewerApp implements Component {
     private rotateHintDiv = document.createElement("div")
     /// Lightning fork: upscaler picked at start ("off" or an algorithm), read by the sidebar.
     upscalingChoice: string = "off"
+    /// Lightning fork: Auto HDR picked at start ("off" or a strength), read by the sidebar.
+    autoHdrChoice: string = "medium"
     /// Lightning fork: progress/failure screen shown while connecting and when the stream stops.
     private connectScreen: ConnectScreen
     private exiting = false
@@ -256,6 +259,7 @@ class ViewerApp implements Component {
         })
 
         this.upscalingChoice = settings.upscaling ? settings.upscalingAlgorithm : "off"
+        this.autoHdrChoice = settings.hdr ? "off" : (settings.autoHdr ?? "medium")
 
         this.touchGamepadMode = settings.touchGamepad ?? "auto"
         this.touchGamepadOptions = {
@@ -1566,6 +1570,16 @@ function touchToGamepadState(touch: TouchGamepadState): GamepadState {
 const SVG_EYE_OFF = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18"/><path d="M10.6 5.1A9.8 9.8 0 0 1 12 5c5 0 9 4.5 10 7a13.4 13.4 0 0 1-3.1 4.2M6.5 6.6A13.2 13.2 0 0 0 2 12c1 2.5 5 7 10 7a9.6 9.6 0 0 0 4.3-1"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>`
 const SVG_MORE = `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>`
 
+function rememberAutoHdrChoice(choice: AutoHdrStrength | "off") {
+    try {
+        const stored = JSON.parse(localStorage.getItem("mlSettings") ?? "{}")
+        stored.autoHdr = choice
+        localStorage.setItem("mlSettings", JSON.stringify(stored))
+    } catch {
+        // Storage unavailable: only this stream changes
+    }
+}
+
 function rememberUpscalingChoice(choice: UpscalingAlgorithm | "off") {
     try {
         const stored = JSON.parse(localStorage.getItem("mlSettings") ?? "{}")
@@ -1664,6 +1678,7 @@ class ViewerSidebar implements Component, Sidebar {
     private touchMode: SegmentedChoice
     private mouseMode: SegmentedChoice
     private touchGamepad: SegmentedChoice
+    private autoHdr: SegmentedChoice
 
     constructor(app: ViewerApp) {
         this.app = app
@@ -1785,6 +1800,21 @@ class ViewerSidebar implements Component, Sidebar {
         this.resolutionCaption.classList.add("lt-menu-caption")
         imageSection.appendChild(this.resolutionCaption)
 
+        // Auto HDR (Lightning fork): only shown where the screen and the browser can do it
+        this.autoHdr = new SegmentedChoice("autoHdr", [
+            { value: "off", name: I.stream.autoHdrOff },
+            { value: "low", name: I.stream.autoHdrLow },
+            { value: "medium", name: I.stream.autoHdrMedium },
+            { value: "high", name: I.stream.autoHdrHigh },
+        ], this.app.autoHdrChoice, this.onAutoHdrChange.bind(this))
+        const hdrSection = this.addSection(I.stream.sectionAutoHdr, this.autoHdr)
+        const hdrCaption = document.createElement("p")
+        hdrCaption.classList.add("lt-menu-caption")
+        hdrCaption.innerText = I.stream.autoHdrCaption
+        hdrSection.appendChild(hdrCaption)
+        hdrSection.hidden = true
+        autoHdrSupported().then(ok => hdrSection.hidden = !ok)
+
         // On-screen controller (Lightning fork): off or a layout, switched live
         this.touchGamepad = new SegmentedChoice("touchGamepad", [
             { value: "off", name: I.stream.gamepadOff },
@@ -1829,6 +1859,13 @@ class ViewerSidebar implements Component, Sidebar {
         section.append(header, choice.root)
         this.div.appendChild(section)
         return section
+    }
+
+    // -- Auto HDR
+    private async onAutoHdrChange(value: string) {
+        const choice = value as AutoHdrStrength | "off"
+        rememberAutoHdrChoice(choice)
+        await this.app.getStream()?.setAutoHdr(choice)
     }
 
     // -- Upscaling

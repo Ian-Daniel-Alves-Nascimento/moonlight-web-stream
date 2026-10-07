@@ -68,6 +68,9 @@ const trueDefaultSettings: Settings =
     // possible values: "standard", "old"
     "pageStyle": "standard",
     "hdr": false,
+    // Lightning fork: HDR highlights on an HDR screen over an SDR stream. possible values:
+    // "off", "low", "medium", "high" (only where the screen and the browser can show HDR)
+    "autoHdr": "medium",
     "useSelectElementPolyfill": false
 }
 
