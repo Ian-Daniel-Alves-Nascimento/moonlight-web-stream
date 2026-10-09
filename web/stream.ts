@@ -1,6 +1,6 @@
 import { Api, apiGetAppImage, apiGetApps, apiGetRole, getApi } from "./api"
 import { buildUrl } from "./config_"
-import { installFetchBridge, notifyParentExit } from "./ponte"
+import { installFetchBridge, isBridged, notifyParentExit } from "./ponte"
 import { iconButton, iconElement, ICON_BOLT, ICON_CHECK, ICON_CLOSE, ICON_ERROR, ICON_EXIT, ICON_FULLSCREEN, ICON_KEYBOARD, ICON_MENU, ICON_MOUSE, ICON_RETRY, ICON_ROTATE, ICON_SEND_KEY, ICON_STATS } from "./component/icons"
 import { DetailedRole, StreamKeys } from "./api_bindings"
 import { Component } from "./component/index"
@@ -1154,6 +1154,7 @@ Upscaler: ${mode} ${upscaler.input[0]}x${upscaler.input[1]} -> ${upscaler.output
     // -- Keyboard Mode
     private keyboardViewportBaselineHeight: number | null = null
     private streamVideoTopOffsetPx: number = 0
+    private readonly bridged = isBridged()
 
     onScreenKeyboardModeWillChange(event: KeyboardModeWillChangeEvent) {
         if (event.detail.enabled) {
@@ -1175,6 +1176,12 @@ Upscaler: ${mode} ${upscaler.input[0]}x${upscaler.input[1]} -> ${upscaler.output
     }
     private updateKeyboardViewportVideoOffset() {
         this.updateKeyboardFloatingButtonPosition()
+
+        // Lightning fork: inside the app the parent page shrinks this frame to the area above
+        // the phone keyboard, so the video already fits there; moving it would push it off
+        if (this.bridged) {
+            return
+        }
 
         const screenKeyboard = this.sidebar.getScreenKeyboard()
         const visualViewport = window.visualViewport

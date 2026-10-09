@@ -5,6 +5,14 @@ based on tag `v3.0.0-prerelease.7`. License: GPL-3.0-or-later (unchanged).
 
 Release tags of this fork use the form `v<upstream-version>-lightning.<n>`.
 
+## v3.0.0-prerelease.7-lightning.9 (2026-10-08)
+
+- Phone keyboard inside an embedding page (`?ponte=1`): the hidden field that holds the keyboard
+  now sits invisible at the top left of the visible area (16px, so iOS doesn't zoom) instead of
+  far off screen. Off screen, iOS scrolled the PARENT page to reach it and the stream left the
+  screen. Embedded, the video is no longer shifted up for the keyboard: the parent shrinks the
+  frame to the area above it.
+
 ## v3.0.0-prerelease.7-lightning.8 (2026-10-06)
 
 - Error codes: every stream failure shows a code (LT-301 ... LT-399) on the failure screen, tap to

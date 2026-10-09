@@ -1530,3 +1530,21 @@ body.lt-video-safe .video-stream {
 .lt-connect-code:hover:not(:disabled) {
     transform: none;
 }
+
+/* Phone keyboard field: kept INSIDE the visible area (top left, invisible). Off screen
+   (200vw/200vh) made iOS scroll to it when it took the focus — inside the app that
+   scrolled the parent page and the stream left the screen. 16px: below that iOS zooms in. */
+.hiddeninput {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    border: 0;
+    opacity: 0;
+    font-size: 16px;
+    caret-color: transparent;
+    pointer-events: none;
+    translate: none;
+}
