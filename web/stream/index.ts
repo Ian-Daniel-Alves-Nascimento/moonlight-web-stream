@@ -13,6 +13,7 @@ import { Transport, TransportAudioType, TransportConnectData, TransportOptions, 
 import { WebSocketTransport } from "./transport/web_socket"
 import { WebRTCTransport } from "./transport/webrtc"
 import { probeDirectConnection } from "./transport/webrtc_probe"
+import { autoBitrateKbps } from "./bitrate"
 import { deviceStreamerSize, evenFloor, physicalScreenSize, safeAreaScreenSize, UpscalingDecision, upscalingStreamerSize } from "./upscaling"
 import { autoVideoCodecs, codecFamily, CodecFamily } from "./codec"
 import { allVideoCodecs, andVideoCodecs, emptyVideoCodecs, hasAnyCodec } from "./video"
@@ -463,6 +464,31 @@ export class Stream implements Component {
         }
     }
 
+    /// Lightning fork: the PC is on this network (from the connection probe); null = not known
+    private networkLocal: boolean | null = null
+    /// Lightning fork: the bitrate this stream asked for and why (stats panel)
+    private chosenBitrate: { kbps: number, auto: boolean, reason: string } | null = null
+    getChosenBitrate() {
+        return this.chosenBitrate
+    }
+
+    /// Lightning fork: automatic (default) or the one set by hand, within the role's maximum.
+    private resolveBitrate(codecHint: VideoFormats): number {
+        const max = this.permissions.maximum_bitrate_kbps
+        if (this.settings.bitrateAuto === false) {
+            const kbps = max != null ? Math.min(this.settings.bitrate, max) : this.settings.bitrate
+            this.chosenBitrate = { kbps, auto: false, reason: "set by hand" }
+            this.debugLog(`Bitrate: ${kbps} kbps (set by hand)`)
+            return kbps
+        }
+        const efficient = !!(codecHint.h265 || codecHint.h265Main10 || codecHint.av1Main8 || codecHint.av1Main10)
+        const auto = autoBitrateKbps(this.streamerSize[0], this.streamerSize[1], this.settings.fps, efficient, this.networkLocal)
+        const kbps = max != null ? Math.min(auto.kbps, max) : auto.kbps
+        this.chosenBitrate = { kbps, auto: true, reason: auto.reason }
+        this.debugLog(`Bitrate: ${kbps} kbps automatic (${auto.reason})`)
+        return kbps
+    }
+
     private async createTransportOptions(): Promise<TransportOptions | null> {
         await this.resolveUpscalingSize()
 
@@ -482,7 +508,7 @@ export class Stream implements Component {
             width: this.streamerSize[0],
             height: this.streamerSize[1],
             fps: this.settings.fps,
-            bitrate: this.settings.bitrate,
+            bitrate: this.resolveBitrate(codecHint),
             hdr: this.settings.hdr,
             localAudioPlayMode: this.settings.playAudioLocal,
             supportedCodecs: dataCodecs,
@@ -520,6 +546,7 @@ export class Stream implements Component {
         }
 
         this.debugLog(`Direct connection probe succeeded (local ${probe.localType}, remote ${probe.remoteType}), creating transport`)
+        this.networkLocal = probe.local
 
         // Create transport
         const transport = new WebRTCTransport(

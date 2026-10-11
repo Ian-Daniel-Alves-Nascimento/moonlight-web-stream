@@ -1,4 +1,8 @@
-use std::{future::pending, sync::Arc};
+use std::{
+    future::pending,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use moonlight_common::stream::{
     control::{
@@ -12,7 +16,7 @@ use moonlight_common::stream::{
     },
     tokio::{MoonlightStream, MoonlightStreamEvent},
 };
-use tokio::{select, sync::mpsc};
+use tokio::{select, sync::mpsc, time::sleep_until};
 use tracing::{debug, info, warn};
 use webrtc::{
     data_channel::DataChannel,
@@ -28,6 +32,11 @@ use crate::{
     },
     app::AppError,
 };
+
+/// Lightning fork: at most one key frame per this interval for the browser's requests (PLI).
+/// A key frame is many times a normal frame; on a lossy Wi-Fi it causes more loss, which asked
+/// for another one: a cascade of stalls. Requests inside the window become one, sent when it ends.
+const CLIENT_IDR_MIN_INTERVAL: Duration = Duration::from_millis(500);
 
 pub async fn webrtc_loop(
     mut stream: MoonlightStream,
@@ -45,6 +54,8 @@ pub async fn webrtc_loop(
 
     let mut moonlight_disconnected = false;
     let mut peer_was_disconnected = true;
+    let mut last_client_idr: Option<Instant> = None;
+    let mut client_idr_pending = false;
     loop {
         if !stream.is_alive() {
             info!("stopping stream because the moonlight stream is dead");
@@ -61,6 +72,7 @@ pub async fn webrtc_loop(
                     if let Err(err) = stream.send_raw(ControlPacket::RequestIdr) {
                         warn!(error = %err, "failed to request initial idr");
                     }
+                    last_client_idr = Some(Instant::now());
                 }
                 peer_was_disconnected = false;
             }
@@ -73,7 +85,20 @@ pub async fn webrtc_loop(
             }
         }
 
+        // When the coalesced key frame request is due (only while one is pending)
+        let idr_due = last_client_idr
+            .map(|t| t + CLIENT_IDR_MIN_INTERVAL)
+            .unwrap_or_else(Instant::now);
+
         select! {
+            _ = sleep_until(idr_due.into()), if client_idr_pending => {
+                debug!("sending the key frame request held back by the interval");
+                if let Err(err) = stream.send_raw(ControlPacket::RequestIdr) {
+                    warn!(error = %err, "failed to send idr");
+                }
+                last_client_idr = Some(Instant::now());
+                client_idr_pending = false;
+            }
             Some(data_channel) = async { if on_data_channel.is_closed() { pending().await } else { on_data_channel.recv().await } } => {
                 let label = data_channel.label().await?;
                 debug!(data_channel = ?label, "got data channel");
@@ -125,9 +150,19 @@ pub async fn webrtc_loop(
 
                 match event {
                     VideoChannelEvent::SignalIdr => {
-                        debug!("requesting idr because the webrtc client requested it");
-                        if let Err(err) = stream.send_raw(ControlPacket::RequestIdr) {
-                            warn!(error = %err, "failed to send idr");
+                        let now = Instant::now();
+                        let allowed = last_client_idr
+                            .is_none_or(|t| now.duration_since(t) >= CLIENT_IDR_MIN_INTERVAL);
+                        if allowed {
+                            debug!("requesting idr because the webrtc client requested it");
+                            if let Err(err) = stream.send_raw(ControlPacket::RequestIdr) {
+                                warn!(error = %err, "failed to send idr");
+                            }
+                            last_client_idr = Some(now);
+                            client_idr_pending = false;
+                        } else {
+                            // One more inside the window: becomes the single request at its end
+                            client_idr_pending = true;
                         }
                     }
                 }

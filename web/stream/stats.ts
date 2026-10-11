@@ -21,6 +21,41 @@ function num(value: number | null | undefined, suffix?: string): string | null {
     }
 }
 
+/// Lightning fork: one readable line of where the time goes, and a hint about the bottleneck.
+/// Rates (loss, bitrate, key frames) come from the transport; anything missing is left out.
+export type LatencyHints = {
+    loss: string
+    rtt: string
+    buffer: string
+    decode: string
+    fps: string
+}
+export function latencySummary(transport: Record<string, StatValue>, requestedFps: number, bitrate: { kbps: number, auto: boolean } | null, hints: LatencyHints): string {
+    const n = (key: string) => typeof transport[key] == "number" && isFinite(transport[key] as number) ? transport[key] as number : null
+    const rtt = n("rttMs"), buffer = n("jitterBufferMs"), decode = n("decodeTimePerFrameMs")
+    const fps = n("currentFps"), loss = n("lossPercent"), mbps = n("receivedMbps"), idr = n("keyFramesPerMinute")
+
+    const parts: Array<string> = []
+    if (rtt != null) parts.push(`RTT ${rtt.toFixed(0)} ms`)
+    if (buffer != null) parts.push(`buffer ${buffer.toFixed(0)} ms`)
+    if (decode != null) parts.push(`decode ${decode.toFixed(1)} ms`)
+    if (fps != null) parts.push(`${fps.toFixed(0)}/${requestedFps} fps`)
+    if (loss != null) parts.push(`loss ${loss.toFixed(1)}%`)
+    if (idr != null) parts.push(`IDR ${idr.toFixed(0)}/min`)
+    if (mbps != null) parts.push(`${mbps.toFixed(1)}${bitrate ? `/${(bitrate.kbps / 1000).toFixed(1)}` : ""} Mbps${bitrate?.auto ? " auto" : ""}`)
+    if (typeof transport.codec == "string") parts.push(transport.codec)
+
+    // The first problem found, in the order that hurts the most
+    let hint = ""
+    if (loss != null && loss > 1) hint = hints.loss
+    else if (rtt != null && rtt > 40) hint = hints.rtt
+    else if (buffer != null && buffer > 40) hint = hints.buffer
+    else if (decode != null && decode > 1000 / Math.max(requestedFps, 1)) hint = hints.decode
+    else if (fps != null && fps < requestedFps * 0.85) hint = hints.fps
+
+    return parts.join(" · ") + (hint ? `\n⚠ ${hint}` : "")
+}
+
 export function streamStatsToText(statsData: StreamStatsData): string {
     let text = `stats:
 video pipeline: ${statsData.videoPipeline}

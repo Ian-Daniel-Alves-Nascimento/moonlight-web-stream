@@ -367,6 +367,8 @@ export class WebRTCTransport implements Transport {
 
     private lastTotalDecodeTime = 0
     private lastFramesDecoded = 0
+    // Lightning fork: rates between two readings (latency panel)
+    private last: { time: number, bytes: number, lost: number, received: number, keyFrames: number, jbDelay: number, jbCount: number } | null = null
     async getStats(): Promise<Record<string, StatValue>> {
         const out: Record<string, StatValue> = {}
 
@@ -375,8 +377,24 @@ export class WebRTCTransport implements Transport {
 
         const stats = await this.peer.getStats()
 
+        // Lightning fork: round trip of the pair in use
+        stats.forEach(report => {
+            if (report.type == "transport" && report.selectedCandidatePairId) {
+                const pair = stats.get(report.selectedCandidatePairId)
+                if (pair?.currentRoundTripTime != null) {
+                    out.rttMs = pair.currentRoundTripTime * 1000
+                }
+            }
+        })
+        if (out.rttMs == null) {
+            stats.forEach(report => {
+                if (report.type == "candidate-pair" && report.nominated && report.state == "succeeded" && report.currentRoundTripTime != null) {
+                    out.rttMs = report.currentRoundTripTime * 1000
+                }
+            })
+        }
+
         for (const [_key, value] of stats) {
-            console.debug(value)
 
             // Video Stream
             if ("type" in value && "kind" in value
@@ -405,6 +423,33 @@ export class WebRTCTransport implements Transport {
                 }
 
                 out.currentFps = value?.framesPerSecond
+
+                // Lightning fork: rates since the previous reading
+                const now = performance.now()
+                const cur = {
+                    time: now,
+                    bytes: value?.bytesReceived ?? 0,
+                    lost: Math.max(0, value?.packetsLost ?? 0),
+                    received: value?.packetsReceived ?? 0,
+                    keyFrames: value?.keyFramesDecoded ?? 0,
+                    jbDelay: value?.jitterBufferDelay ?? 0,
+                    jbCount: value?.jitterBufferEmittedCount ?? 0,
+                }
+                const prev = this.last
+                if (prev && now - prev.time >= 250) {
+                    const seconds = (now - prev.time) / 1000
+                    out.receivedMbps = (cur.bytes - prev.bytes) * 8 / seconds / 1_000_000
+                    const lost = cur.lost - prev.lost
+                    const total = lost + (cur.received - prev.received)
+                    out.lossPercent = total > 0 ? lost / total * 100 : 0
+                    out.keyFramesPerMinute = (cur.keyFrames - prev.keyFrames) / seconds * 60
+                    if (cur.jbCount > prev.jbCount) {
+                        out.jitterBufferMs = (cur.jbDelay - prev.jbDelay) / (cur.jbCount - prev.jbCount) * 1000
+                    }
+                    this.last = cur
+                } else if (!prev) {
+                    this.last = cur
+                }
             }
             if ("type" in value && "mimeType" in value && typeof value.mimeType == "string"
                 && value.type == "codec" && value.mimeType.startsWith("video/")

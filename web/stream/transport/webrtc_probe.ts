@@ -9,7 +9,8 @@ export const WEBRTC_PROBE_TIMEOUT_MS = 12_000
 const GATHER_TIMEOUT_MS = 3_000
 
 export type ProbeResult =
-    | { connected: true, localType: string | null, remoteType: string | null }
+    /// local: the PC is on this network (Lightning fork: caps the automatic bitrate), null = unknown
+    | { connected: true, localType: string | null, remoteType: string | null, local: boolean | null }
     | { connected: false, reason: string }
 
 /// Opens a data-channel-only connection to the host with the same ICE servers as the stream.
@@ -41,10 +42,10 @@ export async function probeDirectConnection(
             return { connected: false, reason: `connection ${peer.connectionState}, ice ${peer.iceConnectionState}` }
         }
 
-        const [localType, remoteType] = await selectedCandidateTypes(peer)
-        logger?.debug(`connection probe connected (local ${localType}, remote ${remoteType})`)
+        const [localType, remoteType, local] = await selectedCandidateTypes(peer)
+        logger?.debug(`connection probe connected (local ${localType}, remote ${remoteType}, ${local == null ? "network unknown" : local ? "same network" : "over the internet"})`)
 
-        return { connected: true, localType, remoteType }
+        return { connected: true, localType, remoteType, local }
     } catch (error) {
         return { connected: false, reason: `${error}` }
     } finally {
@@ -99,7 +100,12 @@ function waitForConnection(peer: RTCPeerConnection, timeoutMs: number): Promise<
 }
 
 /// Candidate types of the selected pair (host / srflx / prflx / relay), for diagnostics.
-async function selectedCandidateTypes(peer: RTCPeerConnection): Promise<[string | null, string | null]> {
+/// Private (LAN) addresses: IPv4 private ranges, link-local, IPv6 unique-local and link-local
+const PRIVATE_ADDRESS = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|f[cd][0-9a-f]{2}:|fe80:)/i
+/// Below this round trip the PC is on the same network even with public addresses (IPv6 at home)
+const LOCAL_RTT_SECONDS = 0.012
+
+async function selectedCandidateTypes(peer: RTCPeerConnection): Promise<[string | null, string | null, boolean | null]> {
     try {
         const stats = await peer.getStats()
 
@@ -117,14 +123,27 @@ async function selectedCandidateTypes(peer: RTCPeerConnection): Promise<[string 
             })
         }
         if (!pair) {
-            return [null, null]
+            return [null, null, null]
+        }
+
+        const remote = stats.get(pair.remoteCandidateId)
+        const address: string = remote?.address ?? remote?.ip ?? ""
+        const rtt: number | undefined = pair.currentRoundTripTime
+        let local: boolean | null = null
+        if (address && PRIVATE_ADDRESS.test(address)) {
+            local = true
+        } else if (rtt != null) {
+            local = rtt < LOCAL_RTT_SECONDS
+        } else if (address) {
+            local = false
         }
 
         return [
             stats.get(pair.localCandidateId)?.candidateType ?? null,
-            stats.get(pair.remoteCandidateId)?.candidateType ?? null,
+            remote?.candidateType ?? null,
+            local,
         ]
     } catch {
-        return [null, null]
+        return [null, null, null]
     }
 }

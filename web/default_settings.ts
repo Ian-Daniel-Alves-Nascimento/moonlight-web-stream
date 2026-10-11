@@ -7,6 +7,9 @@ const trueDefaultSettings: Settings =
     "sidebarEdge": "left",
     "hideSidebarButton": false,
     "bitrate": 10000,
+    // Lightning fork: automatic bitrate (resolution x fps x codec, capped by the network);
+    // "bitrate" above is used only when this is false
+    "bitrateAuto": true,
     "fps": 60,
     // possible values: "auto", "full", "safe", "720p", "1080p", "1440p", "4k", "custom"
     // (Lightning fork: "auto" = the monitor's resolution with a physical monitor, this screen's

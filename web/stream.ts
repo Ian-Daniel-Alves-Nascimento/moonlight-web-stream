@@ -20,7 +20,7 @@ import { emptyKeyModifiers } from "./stream/keyboard"
 import { emptyGamepadState, GamepadState } from "./stream/gamepad"
 import { PAD, TouchGamepad, TouchGamepadLayout, TouchGamepadOptions, TouchGamepadState } from "./stream/touch_gamepad"
 import { AutoHdrStrength, autoHdrSupported } from "./stream/video/auto_hdr"
-import { streamStatsToText } from "./stream/stats"
+import { latencySummary, streamStatsToText } from "./stream/stats"
 import { physicalScreenSize } from "./stream/upscaling"
 import { avoidCodec, codecDisplayName } from "./stream/codec"
 import "./styles/index"
@@ -131,6 +131,7 @@ function parseSettingsFromQuery(queryParams: URLSearchParams): Partial<Settings>
     const bitrate = queryParams.get("bitrate")
     if (bitrate) {
         settings.bitrate = Number(bitrate)
+        settings.bitrateAuto = false
     }
 
     const fps = queryParams.get("fps")
@@ -201,6 +202,8 @@ class ViewerApp implements Component {
     upscalingChoice: string = "off"
     /// Lightning fork: Auto HDR picked at start ("off" or a strength), read by the sidebar.
     autoHdrChoice: string = "medium"
+    /// Lightning fork: fps asked of the PC (latency panel)
+    private requestedFps = 60
     /// Lightning fork: progress/failure screen shown while connecting and when the stream stops.
     private connectScreen: ConnectScreen
     private exiting = false
@@ -259,6 +262,7 @@ class ViewerApp implements Component {
         })
 
         this.upscalingChoice = settings.upscaling ? settings.upscalingAlgorithm : "off"
+        this.requestedFps = settings.fps
         this.autoHdrChoice = settings.hdr ? "off" : (settings.autoHdr ?? "medium")
 
         this.touchGamepadMode = settings.touchGamepad ?? "auto"
@@ -293,7 +297,15 @@ class ViewerApp implements Component {
             if (stats && stats.isEnabled()) {
                 this.statsDiv.hidden = false
 
-                let text = streamStatsToText(stats.getCurrentStats())
+                const current = stats.getCurrentStats()
+                // Lightning fork: the latency line first, then the raw numbers
+                let text = latencySummary(current.transport, this.requestedFps, this.getStream()?.getChosenBitrate() ?? null, {
+                    loss: I.stream.latencyHintLoss,
+                    rtt: I.stream.latencyHintRtt,
+                    buffer: I.stream.latencyHintBuffer,
+                    decode: I.stream.latencyHintDecode,
+                    fps: I.stream.latencyHintFps,
+                }) + "\n\n" + streamStatsToText(current)
                 const upscaler = this.getStream()?.getUpscalerStats()
                 if (upscaler) {
                     const level = upscaler.lastAlgorithm ?? "off"
@@ -969,10 +981,14 @@ Upscaler: ${mode} ${upscaler.input[0]}x${upscaler.input[1]} -> ${upscaler.output
         rememberTouchGamepadChoice(choice)
         this.updateTouchGamepad()
     }
+    /// Lightning fork: the controller is read every few milliseconds, not once per screen frame.
+    /// At 60 Hz a press waited ~8 ms on average just to be seen; only changes are sent, so this
+    /// doesn't add traffic. Timers slow down by themselves when the page is in the background.
+    private gamepadTimer: number | null = null
     onGamepadUpdate() {
-        window.requestAnimationFrame(this.onGamepadUpdate.bind(this))
-
-        this.stream.getInput().onGamepadUpdate()
+        if (this.gamepadTimer == null) {
+            this.gamepadTimer = window.setInterval(() => this.stream.getInput().onGamepadUpdate(), GAMEPAD_POLL_MS)
+        }
     }
 
     // Fullscreen
@@ -1617,6 +1633,9 @@ function rememberUpscalingChoice(choice: UpscalingAlgorithm | "off") {
         // Storage unavailable: only this stream changes
     }
 }
+
+/// Lightning fork: how often the controller is read (see onGamepadUpdate)
+const GAMEPAD_POLL_MS = 4
 
 /// The page can go fullscreen (not on iPhone Safari, whose home screen app already is).
 function canUseFullscreen(): boolean {

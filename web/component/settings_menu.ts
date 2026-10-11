@@ -13,6 +13,9 @@ export type Settings = {
     sidebarEdge: SidebarEdge,
     hideSidebarButton: boolean,
     bitrate: number
+    /// Lightning fork: the bitrate follows resolution, fps, codec and network (stream/bitrate.ts);
+    /// false = the number above, set by hand
+    bitrateAuto: boolean
     /// Lightning fork: "auto" (monitor's resolution with the physical monitor, this screen's with
     /// a virtual display), "full" (this screen, physical pixels), "safe" (this screen without the
     /// notch area). "native" is the old name of "full".
@@ -199,6 +202,7 @@ export class StreamSettingsComponent implements Component {
 
     private streamHeader: HTMLHeadingElement = document.createElement("h3")
     private bitrate: InputComponent
+    private bitrateAuto: InputComponent
     private fps: SelectComponent
     private videoCodec: SelectComponent
     private forceVideoElementRenderer: InputComponent
@@ -290,14 +294,21 @@ export class StreamSettingsComponent implements Component {
         this.streamHeader.innerText = i.video
         this.divElement.appendChild(this.streamHeader)
 
-        // Bitrate
+        // Bitrate (Lightning fork: automatic by default)
+        this.bitrateAuto = new InputComponent("bitrateAuto", "checkbox", i.bitrateAuto, {
+            checked: settings?.bitrateAuto ?? defaultSettings_.bitrateAuto ?? true
+        })
+        this.bitrateAuto.addChangeListener(this.onSettingsChange.bind(this))
+        this.bitrateAuto.mount(this.divElement)
+
         this.bitrate = new InputComponent("bitrate", "number", i.bitrate, {
             defaultValue: defaultSettings_.bitrate.toString(),
             value: settings?.bitrate?.toString(),
             step: "100",
             numberSlider: {
                 range_min: Math.min(this.permissions.maximum_bitrate_kbps ?? 1000, 1000),
-                range_max: this.permissions.maximum_bitrate_kbps ?? 10000,
+                // Lightning fork: up to 150 Mbps by hand (it stopped at 10, the old default)
+                range_max: this.permissions.maximum_bitrate_kbps ?? 150000,
             }
         })
         this.bitrate.addChangeListener(this.onSettingsChange.bind(this))
@@ -714,7 +725,7 @@ export class StreamSettingsComponent implements Component {
         }
         const quality = settingsGroup(this.divElement, i.groupQuality)
         for (const component of [
-            this.videoSize, this.videoSizeWidth, this.videoSizeHeight, this.fps, this.bitrate,
+            this.videoSize, this.videoSizeWidth, this.videoSizeHeight, this.fps, this.bitrateAuto, this.bitrate,
             this.upscaling, this.upscalingAlgorithm, this.upscalingRenderScale, this.videoCodec, this.autoHdr, this.hdr,
         ]) {
             component.mount(quality)
@@ -752,6 +763,9 @@ export class StreamSettingsComponent implements Component {
         this.videoSizeWidth.setVisible(custom)
         this.videoSizeHeight.setVisible(custom)
 
+        // The number only matters when set by hand
+        this.bitrate.setVisible(!this.bitrateAuto.isChecked())
+
         const upscaling = this.upscaling.isChecked()
         this.upscalingAlgorithm.setVisible(upscaling)
         this.upscalingRenderScale.setVisible(upscaling)
@@ -784,6 +798,7 @@ export class StreamSettingsComponent implements Component {
         settings.sidebarEdge = this.sidebarEdge.getValue() as any
         settings.hideSidebarButton = this.hideSidebarButton.isChecked()
         settings.bitrate = parseInt(this.bitrate.getValue())
+        settings.bitrateAuto = this.bitrateAuto.isChecked()
         settings.fps = parseInt(this.fps.getValue() ?? "60")
         settings.videoSize = this.videoSize.getValue() as any
         settings.videoSizeCustom = {

@@ -5,6 +5,24 @@ based on tag `v3.0.0-prerelease.7`. License: GPL-3.0-or-later (unchanged).
 
 Release tags of this fork use the form `v<upstream-version>-lightning.<n>`.
 
+## v3.0.0-prerelease.7-lightning.10 (2026-10-11)
+
+- Automatic bitrate (`web/stream/bitrate.ts`, on by default, `bitrateAuto`): the official
+  Moonlight clients' table (pixels at 30 fps) x frame rate (square root above 60) x codec (HEVC/AV1
+  -25%), capped by where the PC is: 80 Mbps on the same network, 20 Mbps over the internet (home
+  upload), 40 Mbps when unknown. Every stream used to start at 10 Mbps. The connection probe now
+  tells "same network" (private address, or a round trip under 12 ms for IPv6 at home). By hand,
+  the slider goes up to 150 Mbps (it stopped at 10).
+- Key frame brake (server): at most one key frame per 500 ms for the browser's requests (PLI);
+  requests inside the window become one at its end. On lossy Wi-Fi each huge key frame caused more
+  loss and another request: a cascade of stalls.
+- Controllers are read every 4 ms instead of once per screen frame (~6 ms less at 60 Hz); only
+  changes are sent.
+- Stats: a latency line first (round trip, jitter buffer, decode, fps received/asked, loss, key
+  frames per minute, bitrate received/asked, codec) with a hint about the worst bottleneck; the
+  per-stat console.debug flood is gone.
+- `tokio` lists the `time` feature it uses.
+
 ## v3.0.0-prerelease.7-lightning.9 (2026-10-08)
 
 - Phone keyboard inside an embedding page (`?ponte=1`): the hidden field that holds the keyboard
