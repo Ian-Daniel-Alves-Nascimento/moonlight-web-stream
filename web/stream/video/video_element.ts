@@ -8,6 +8,7 @@ import { UpscalingAlgorithm } from "../../component/settings_menu"
 import { Logger } from "../log"
 import { VideoUpscaler } from "./upscale"
 import { AutoHdr, AutoHdrStrength } from "./auto_hdr"
+import { PictureCleanup, PictureCleanupStats } from "./cleanup_gpu"
 
 const VIDEO_DECODER_CODECS: Record<keyof VideoFormats, string> = {
     "h264": "avc1.42E01E",
@@ -74,9 +75,13 @@ export class VideoElementRenderer implements TrackVideoRenderer, VideoRenderer {
     private upscaler: VideoUpscaler | null = null
     /// Lightning fork: HDR highlights over the picture (or over the upscaler), see auto_hdr.ts
     private autoHdr: AutoHdr | null = null
-    /// Lightning fork: picture cleanup wanted (cleanup_shaders.ts); runs inside the upscaler, or
-    /// in a cleanup-only one when upscaling is off
+    /// Lightning fork: picture cleanup wanted (cleanup_shaders.ts). Where it runs, see
+    /// refreshCleanup: Auto HDR's pass, the upscaler's pass, or its own WebGPU canvas
     private cleanupWanted = false
+    private gpuCleanup: PictureCleanup | null = null
+    private gpuCleanupStarting = false
+    /// No WebGPU here: the WebGL cleanup is the fallback for this stream
+    private gpuCleanupFailed = false
     private pipelineLogger?: Logger
 
     constructor() {
@@ -112,6 +117,9 @@ export class VideoElementRenderer implements TrackVideoRenderer, VideoRenderer {
         this.upscaler = null
         this.autoHdr?.destroy()
         this.autoHdr = null
+        this.gpuCleanup?.destroy()
+        this.gpuCleanup = null
+        this.cleanupWanted = false
 
         if (this.oldTrack) {
             this.stream.removeTrack(this.oldTrack)
@@ -134,12 +142,14 @@ export class VideoElementRenderer implements TrackVideoRenderer, VideoRenderer {
 
     mount(parent: HTMLElement): void {
         parent.appendChild(this.videoElement)
+        this.gpuCleanup?.mount()
         this.upscaler?.mount()
         this.placeAutoHdr()
     }
     unmount(parent: HTMLElement): void {
         this.autoHdr?.unmount()
         this.upscaler?.unmount()
+        this.gpuCleanup?.unmount()
         parent.removeChild(this.videoElement)
     }
 
@@ -152,6 +162,7 @@ export class VideoElementRenderer implements TrackVideoRenderer, VideoRenderer {
         if (this.upscaler && this.videoElement.isConnected) {
             this.upscaler.mount()
         }
+        this.refreshCleanup()
         this.placeAutoHdr()
         return this.upscaler != null
     }
@@ -162,38 +173,105 @@ export class VideoElementRenderer implements TrackVideoRenderer, VideoRenderer {
     disableUpscaling() {
         this.upscaler?.destroy()
         this.upscaler = null
-        // The cleanup keeps going on its own
-        if (this.cleanupWanted) {
-            this.startCleanupOnly()
-        }
+        this.refreshCleanup()
         this.placeAutoHdr()
     }
 
-    /// Lightning fork: picture cleanup on/off, live. False when this device can't run it.
-    setCleanup(on: boolean, logger?: Logger): boolean {
+    /// Lightning fork: picture cleanup on/off, live.
+    setCleanup(on: boolean, logger?: Logger) {
         this.pipelineLogger = logger ?? this.pipelineLogger
         this.cleanupWanted = on
-        let ok = true
-        if (this.upscaler && this.upscaler.algorithm == "none") {
-            // Cleanup-only: off means back to the browser's own picture
-            if (!on) {
-                this.upscaler.destroy()
-                this.upscaler = null
-            }
-        } else if (this.upscaler) {
-            ok = this.upscaler.setCleanup(on)
-        } else if (on) {
-            ok = this.startCleanupOnly()
-        }
+        this.refreshCleanup()
         this.placeAutoHdr()
-        return ok
     }
-    private startCleanupOnly(): boolean {
-        this.upscaler = VideoUpscaler.create(this.videoElement, "none", this.pipelineLogger, true)
-        if (this.upscaler && this.videoElement.isConnected) {
-            this.upscaler.mount()
+    /// Where the cleanup runs, cheapest first:
+    ///   - Auto HDR on: in its pass (its canvas covers the picture, and it imports the video
+    ///     without a copy);
+    ///   - the upscaler drawing: in its WebGL pass (it copies the frame anyway);
+    ///   - otherwise its own WebGPU canvas, frame imported without a copy (cleanup_gpu.ts);
+    ///   - no WebGPU: a WebGL cleanup-only upscaler, which turns itself off where copying the
+    ///     frame is too slow.
+    private refreshCleanup() {
+        const want = this.cleanupWanted
+        const fullUpscaler = this.upscaler && this.upscaler.algorithm != "none" ? this.upscaler : null
+        fullUpscaler?.setCleanup(want)
+        this.autoHdr?.setCleanup(want)
+
+        const ownCanvas = want && !this.autoHdr
+        // The WebGL cleanup-only upscaler is only the fallback for a device without WebGPU
+        if ((!ownCanvas || !this.gpuCleanupFailed) && this.upscaler && this.upscaler.algorithm == "none") {
+            this.upscaler.destroy()
+            this.upscaler = null
         }
-        return this.upscaler != null && this.upscaler.isCleanupOn()
+        if (!ownCanvas) {
+            this.gpuCleanup?.destroy()
+            this.gpuCleanup = null
+            return
+        }
+        if (this.gpuCleanup) {
+            // Hidden while the upscaler draws the picture (with the cleanup in its own pass)
+            this.gpuCleanup.skip = () => this.upscaler?.isShowing() ?? false
+            return
+        }
+        if (this.gpuCleanupFailed) {
+            if (!this.upscaler) {
+                this.upscaler = VideoUpscaler.create(this.videoElement, "none", this.pipelineLogger, true)
+                if (this.upscaler && this.videoElement.isConnected) {
+                    this.upscaler.mount()
+                }
+            }
+            return
+        }
+        if (this.gpuCleanupStarting) {
+            return
+        }
+        this.gpuCleanupStarting = true
+        PictureCleanup.create(this.videoElement, this.pipelineLogger).then(cleanup => {
+            this.gpuCleanupStarting = false
+            if (!cleanup) {
+                this.pipelineLogger?.debug("Picture cleanup: no WebGPU, using WebGL")
+                this.gpuCleanupFailed = true
+            } else if (!this.cleanupWanted || this.autoHdr || this.gpuCleanup) {
+                // Changed while the GPU was starting
+                cleanup.destroy()
+                return
+            } else {
+                this.gpuCleanup = cleanup
+                cleanup.onGaveUp = () => {
+                    // Too slow even without a copy: WebGL would do worse, the plain video shows
+                    if (this.gpuCleanup == cleanup) {
+                        this.gpuCleanup = null
+                        this.gpuCleanupGaveUp = true
+                        cleanup.destroy()
+                    }
+                }
+                if (this.videoElement.isConnected) {
+                    cleanup.mount()
+                }
+            }
+            this.refreshCleanup()
+            this.placeAutoHdr()
+        })
+    }
+    private gpuCleanupGaveUp = false
+    /// Lightning fork: where the cleanup runs right now, for the stats.
+    getCleanupState(): { where: string, stats: PictureCleanupStats | null } {
+        if (!this.cleanupWanted) {
+            return { where: "off", stats: null }
+        }
+        if (this.autoHdr?.isCleaning()) {
+            return { where: "in the Auto HDR pass (WebGPU)", stats: null }
+        }
+        if (this.upscaler?.isShowing() && this.upscaler.isCleanupOn()) {
+            return { where: this.upscaler.algorithm == "none" ? "WebGL" : "in the upscaler pass (WebGL)", stats: null }
+        }
+        if (this.gpuCleanup) {
+            return { where: "WebGPU", stats: this.gpuCleanup.stats }
+        }
+        if (this.gpuCleanupStarting) {
+            return { where: "starting", stats: null }
+        }
+        return { where: this.gpuCleanupGaveUp || this.gpuCleanupFailed ? "off, this device can't keep up" : "off", stats: null }
     }
 
     /// Lightning fork: HDR highlights on an HDR screen. False when this device can't.
@@ -214,12 +292,14 @@ export class VideoElementRenderer implements TrackVideoRenderer, VideoRenderer {
             return true
         }
         this.autoHdr = autoHdr
+        this.refreshCleanup()
         this.placeAutoHdr()
         return true
     }
     disableAutoHdr() {
         this.autoHdr?.destroy()
         this.autoHdr = null
+        this.refreshCleanup()
         if (this.upscaler) {
             this.upscaler.onRendered = null
         }

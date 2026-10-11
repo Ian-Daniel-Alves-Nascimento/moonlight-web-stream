@@ -26,6 +26,10 @@ export type UpscalerMode = UpscalingAlgorithm | "none"
 /// Lightning fork: the cleanup turns itself off when the device can't keep up with it
 const CLEANUP_LATE_LIMIT = 0.3
 const CLEANUP_MIN_FRAMES = 240
+/// ...or when drawing one frame takes more than this share of the video's frame time: copying
+/// the frame to the GPU can block (iPhone: ~16.7 ms per frame), and a 120 fps stream then shows
+/// at 60, less fluid than the plain video
+const CLEANUP_SUBMIT_LIMIT = 0.75
 
 type Program = {
     program: WebGLProgram
@@ -50,6 +54,9 @@ export type UpscalerStats = {
     gpuMs: number | null
     /// Share of frames that arrived before the GPU had finished the previous one.
     lateRatio: number
+    /// Lightning fork: frames per second the video decodes, and how many of them get drawn here
+    videoFps: number
+    drawnFps: number
     /// "auto": why the level last changed.
     governorReason: string
 }
@@ -120,6 +127,10 @@ export class VideoUpscaler {
     private lastFrameTime = 0
     private frameIntervalMs = 1000 / 60
     private lateAverage = 0
+    // Lightning fork: decoded vs drawn frame rate, counted over ~1 s
+    private rateStart = 0
+    private rateDecoded = 0
+    private rateDrawn = 0
 
     private constructor(private video: HTMLVideoElement, readonly algorithm: UpscalerMode, private logger?: Logger) {
         this.stats = {
@@ -133,6 +144,8 @@ export class VideoUpscaler {
             avgSubmitMs: 0,
             gpuMs: null,
             lateRatio: 0,
+            videoFps: 0,
+            drawnFps: 0,
             governorReason: "",
         }
 
@@ -354,10 +367,18 @@ export class VideoUpscaler {
         const sample = this.measure(start)
         const algorithm: UpscalingLevel | "none" = this.algorithm == "none" ? "none" : this.pickLevel(inW, inH, outW, outH, sample, start)
 
+        this.countRates(start)
+
         // The cleanup is one more pass per frame: on a device that can't fit it, it goes away
-        if (this.isCleanupOn() && this.stats.frames > CLEANUP_MIN_FRAMES && this.stats.lateRatio > CLEANUP_LATE_LIMIT) {
-            this.cleanupGaveUp = true
-            this.logger?.debug(`Picture cleanup: off, this device can't keep up (${Math.round(this.stats.lateRatio * 100)}% late)`)
+        if (this.isCleanupOn() && this.stats.frames > CLEANUP_MIN_FRAMES) {
+            const budgetMs = this.stats.videoFps > 0 ? 1000 / this.stats.videoFps : 0
+            const slowSubmit = budgetMs > 0 && this.stats.avgSubmitMs > budgetMs * CLEANUP_SUBMIT_LIMIT
+            if (this.stats.lateRatio > CLEANUP_LATE_LIMIT || slowSubmit) {
+                this.cleanupGaveUp = true
+                this.logger?.debug(slowSubmit
+                    ? `Picture cleanup: off, drawing a frame takes ${this.stats.avgSubmitMs.toFixed(1)} ms for a ${Math.round(this.stats.videoFps)} fps video`
+                    : `Picture cleanup: off, this device can't keep up (${Math.round(this.stats.lateRatio * 100)}% late)`)
+            }
         }
         const cleanup = this.isCleanupOn() && this.clean != null
 
@@ -468,6 +489,32 @@ export class VideoUpscaler {
         this.stats.frames++
         this.stats.lastSubmitMs = submitMs
         this.stats.avgSubmitMs = this.stats.frames == 1 ? submitMs : this.stats.avgSubmitMs * 0.95 + submitMs * 0.05
+    }
+
+    /// Lightning fork: the video's decoded frame rate and the rate drawn here, once a second.
+    private countRates(now: number) {
+        this.rateDrawn++
+        if (this.rateStart == 0) {
+            this.rateStart = now
+            this.rateDecoded = this.video.getVideoPlaybackQuality?.().totalVideoFrames ?? 0
+            this.rateDrawn = 0
+            return
+        }
+        const elapsed = now - this.rateStart
+        if (elapsed < 1000) {
+            return
+        }
+        const decoded = this.video.getVideoPlaybackQuality?.().totalVideoFrames ?? 0
+        if (elapsed < 3000 && decoded >= this.rateDecoded) {
+            const videoFps = (decoded - this.rateDecoded) * 1000 / elapsed
+            const drawnFps = this.rateDrawn * 1000 / elapsed
+            // Smoothed; a pause (background, network stall) is skipped instead of counted
+            this.stats.videoFps = this.stats.videoFps == 0 ? videoFps : this.stats.videoFps * 0.7 + videoFps * 0.3
+            this.stats.drawnFps = this.stats.drawnFps == 0 ? drawnFps : this.stats.drawnFps * 0.7 + drawnFps * 0.3
+        }
+        this.rateStart = now
+        this.rateDecoded = decoded
+        this.rateDrawn = 0
     }
 
     /// What the previous frame cost, read when this one arrives. Null when the timing says

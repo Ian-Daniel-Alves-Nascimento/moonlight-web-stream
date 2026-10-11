@@ -13,6 +13,8 @@
  *     lamp, a reflection): a 1/8 scale luminance map tells how big the bright area is.
  *
  * Source: the <video> itself (imported without a copy) or, with the upscaler on, its canvas.
+ * From the video, the picture cleanup (cleanup_shaders.ts) runs in the same pass: this canvas
+ * covers the picture, so a cleanup canvas under it would never show.
  * Only where the screen is HDR and the browser accepts the extended mode (iOS 26 Safari,
  * Chrome on Android/desktop with an HDR display).
  *
@@ -25,6 +27,7 @@
 /// <reference types="@webgpu/types" />
 import { Logger } from "../log"
 import { getStreamRectCorrected } from "./index"
+import { CLEAN_WGSL } from "./cleanup_shaders"
 
 export type AutoHdrStrength = "low" | "medium" | "high"
 
@@ -78,11 +81,17 @@ export function autoHdrSupported(): Promise<boolean> {
 function shader(external: boolean): string {
     const source = external
         ? `@group(0) @binding(0) var src: texture_external;
-           fn srcSample(uv: vec2f) -> vec3f { return textureSampleBaseClampToEdge(src, smp, uv).rgb; }`
+           fn srcSample(uv: vec2f) -> vec3f { return textureSampleBaseClampToEdge(src, smp, uv).rgb; }
+           ${CLEAN_WGSL}
+           fn mainSample(uv: vec2f) -> vec3f {
+               if (p.cleanup > 0.5) { return cleanPixel(uv, p.texel); }
+               return srcSample(uv);
+           }`
         : `@group(0) @binding(0) var src: texture_2d<f32>;
-           fn srcSample(uv: vec2f) -> vec3f { return textureSampleLevel(src, smp, uv, 0.0).rgb; }`
+           fn srcSample(uv: vec2f) -> vec3f { return textureSampleLevel(src, smp, uv, 0.0).rgb; }
+           fn mainSample(uv: vec2f) -> vec3f { return srcSample(uv); }`
     return `
-        struct Params { peak: f32, knee: f32, curve: f32, unused: f32, size: vec2f, radius: vec2f }
+        struct Params { peak: f32, knee: f32, curve: f32, cleanup: f32, size: vec2f, radius: vec2f, texel: vec2f, unused: vec2f }
         @group(0) @binding(1) var smp: sampler;
         @group(0) @binding(2) var<uniform> p: Params;
         @group(0) @binding(3) var areaMap: texture_2d<f32>;
@@ -121,7 +130,7 @@ function shader(external: boolean): string {
 
         // Pass 2: expand the highlights
         @fragment fn fsMain(o: Out) -> @location(0) vec4f {
-            let color = toLinear(srcSample(o.uv));
+            let color = toLinear(mainSample(o.uv));
             let l = luma(color);
             let t = clamp((l - p.knee) / (1.0 - p.knee), 0.000001, 1.0);
             // Big bright areas (menus, a white wall) rise less than small highlights
@@ -176,6 +185,8 @@ export class AutoHdr {
     private errorLogged = false
     /// The upscaler's canvas while it shows (the upscaler then calls renderFrom after each frame)
     private upscaledSource: (() => HTMLCanvasElement | null) | null = null
+    /// Lightning fork: the picture cleanup in this pass (only when the source is the video)
+    private cleanup = false
 
     private constructor(private video: HTMLVideoElement, private device: GPUDevice, private strength: AutoHdrStrength, private logger?: Logger) {
         const context = this.canvas.getContext("webgpu")
@@ -196,7 +207,7 @@ export class AutoHdr {
         })
 
         this.sampler = device.createSampler({ magFilter: "linear", minFilter: "linear" })
-        this.params = device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
+        this.params = device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
         this.external = this.createPipelines(true)
         this.texture2d = this.createPipelines(false)
 
@@ -222,6 +233,13 @@ export class AutoHdr {
     }
     getStrength(): AutoHdrStrength {
         return this.strength
+    }
+    setCleanup(on: boolean) {
+        this.cleanup = on
+    }
+    /// The cleanup runs on the frames drawn from the video (from the upscaler, it already ran)
+    isCleaning(): boolean {
+        return this.cleanup && this.running && !this.upscaledSource?.()
     }
     /// With the upscaler on, its canvas is the source (HDR and FSR together)
     setUpscaledSource(source: (() => HTMLCanvasElement | null) | null) {
@@ -343,8 +361,9 @@ export class AutoHdr {
 
         // Each local texel averages a 4x4 grid spread over LOCAL_SCALE output pixels
         device.queue.writeBuffer(this.params, 0, new Float32Array([
-            PEAK[this.strength], KNEE, CURVE, 0,
+            PEAK[this.strength], KNEE, CURVE, this.cleanup && !upscaled ? 1 : 0,
             outW, outH, AREA_RADIUS * Math.max(outW, outH) / outW, AREA_RADIUS * Math.max(outW, outH) / outH,
+            1 / inW, 1 / inH, 0, 0,
         ]))
 
         const encoder = device.createCommandEncoder()

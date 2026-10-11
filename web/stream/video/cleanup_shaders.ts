@@ -1,17 +1,20 @@
 /*
- * Picture cleanup (GLSL ES 3.00) for the Lightning fork of Moonlight Web: runs on each decoded
- * frame BEFORE the upscaler (whose sharpening otherwise makes compression blocks stand out), or
- * alone straight to the screen when upscaling is off.
+ * Picture cleanup for the Lightning fork of Moonlight Web, on each decoded frame: in WebGPU
+ * (CLEAN_WGSL, cleanup_gpu.ts and auto_hdr.ts), which reads the video frame without copying it,
+ * or in WebGL (CLEAN_FS) inside the upscaler, which copies the frame anyway.
  *
- *   1. Flat areas: a neighbour joins the average only if it looks like the pixel, and only where
- *      the whole 3x3 neighbourhood is low contrast, so edges, text and detail are left alone.
- *      Takes the blocks and the "mosquito" noise out of skies, walls and shadows.
+ *   1. Flat areas: four bilinear reads on the diagonals, each the mean of a 2x2 block, together
+ *      make the 3x3 tent filter [1 2 1; 2 4 2; 1 2 1]/16 in 4 reads instead of 9. A read that
+ *      doesn't look like the pixel is left out (the pixel stands in for it), and only where the
+ *      neighbourhood is low contrast: edges, text and detail are left alone. Takes the blocks
+ *      and the "mosquito" noise out of skies, walls and shadows.
  *   2. Deband: four samples spread around the pixel; when all of them are within a few levels of
  *      it, the pixel sits on a smooth gradient that the encoder quantized into steps, and their
  *      average replaces it.
  *   3. Dither: ±0.5 level of fixed noise on an 8-bit output so new steps don't appear.
  *
- * The noise is a stable per-pixel hash (no time): noise that changes every frame shimmers.
+ * 9 texture reads per pixel. The noise is a stable per-pixel hash (no time): noise that changes
+ * every frame shimmers.
  *
  * Copyright (c) 2026 the author of Lightning Launcher (github.com/Ian-Daniel-Alves-Nascimento).
  * This program is free software: you can redistribute it and/or modify it under the terms of
@@ -41,24 +44,17 @@ void main() {
     float lc = luma(c);
 
     // 1. Flat areas
-    vec3 sum = c;
-    float wsum = 1.0;
-    float lo = lc;
-    float hi = lc;
-    for (int y = -1; y <= 1; y++) {
-        for (int x = -1; x <= 1; x++) {
-            if (x == 0 && y == 0) continue;
-            vec3 n = texture(uTex, vUv + vec2(float(x), float(y)) * uTexel).rgb;
-            float ln = luma(n);
-            lo = min(lo, ln);
-            hi = max(hi, ln);
-            float w = 1.0 - smoothstep(0.015, 0.05, abs(ln - lc));
-            sum += n * w;
-            wsum += w;
-        }
-    }
-    float flatness = 1.0 - smoothstep(0.04, 0.12, hi - lo);
-    c = mix(c, sum / wsum, flatness * 0.85);
+    vec2 h = uTexel * 0.5;
+    vec3 n0 = texture(uTex, vUv + vec2(-h.x, -h.y)).rgb;
+    vec3 n1 = texture(uTex, vUv + vec2(h.x, -h.y)).rgb;
+    vec3 n2 = texture(uTex, vUv + vec2(-h.x, h.y)).rgb;
+    vec3 n3 = texture(uTex, vUv + vec2(h.x, h.y)).rgb;
+    vec4 l = vec4(luma(n0), luma(n1), luma(n2), luma(n3));
+    vec4 w = 1.0 - smoothstep(vec4(0.01), vec4(0.035), abs(l - lc));
+    float range = max(max(max(l.x, l.y), max(l.z, l.w)), lc) - min(min(min(l.x, l.y), min(l.z, l.w)), lc);
+    float flatness = 1.0 - smoothstep(0.03, 0.09, range);
+    vec3 tent = (n0 * w.x + n1 * w.y + n2 * w.z + n3 * w.w + c * (4.0 - dot(w, vec4(1.0)))) * 0.25;
+    c = mix(c, tent, flatness * 0.9);
 
     // 2. Deband
     vec2 cell = floor(vUv / uTexel);
@@ -79,5 +75,51 @@ void main() {
     c += noise * (0.5 / 255.0) * uDither;
 
     oColor = vec4(c, 1.0);
+}
+`;
+
+/// The same cleanup in WGSL. Needs `fn srcSample(uv: vec2f) -> vec3f` (the frame, in sRGB as
+/// decoded) declared by the shader that includes it. `texel` is 1 / the frame's size.
+export const CLEAN_WGSL = `
+fn cleanLuma(c: vec3f) -> f32 { return dot(c, vec3f(0.299, 0.587, 0.114)); }
+fn cleanHash(q: vec2f) -> f32 {
+    var p3 = fract(vec3f(q.x, q.y, q.x) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+/// Triangular noise in -1..1, fixed per screen pixel: times 0.5 / 255 before an 8-bit output
+fn cleanDither(pos: vec2f) -> f32 {
+    return cleanHash(pos) + cleanHash(pos + 71.0) - 1.0;
+}
+fn cleanPixel(uv: vec2f, texel: vec2f) -> vec3f {
+    var c = srcSample(uv);
+    let lc = cleanLuma(c);
+
+    // 1. Flat areas: the 3x3 tent in 4 bilinear reads
+    let h = texel * 0.5;
+    let n0 = srcSample(uv + vec2f(-h.x, -h.y));
+    let n1 = srcSample(uv + vec2f(h.x, -h.y));
+    let n2 = srcSample(uv + vec2f(-h.x, h.y));
+    let n3 = srcSample(uv + vec2f(h.x, h.y));
+    let l = vec4f(cleanLuma(n0), cleanLuma(n1), cleanLuma(n2), cleanLuma(n3));
+    let w = 1.0 - smoothstep(vec4f(0.01), vec4f(0.035), abs(l - lc));
+    let range = max(max(max(l.x, l.y), max(l.z, l.w)), lc) - min(min(min(l.x, l.y), min(l.z, l.w)), lc);
+    let flatness = 1.0 - smoothstep(0.03, 0.09, range);
+    let tent = (n0 * w.x + n1 * w.y + n2 * w.z + n3 * w.w + c * (4.0 - dot(w, vec4f(1.0)))) * 0.25;
+    c = mix(c, tent, flatness * 0.9);
+
+    // 2. Deband
+    let cell = floor(uv / texel);
+    let a = cleanHash(cell) * 6.2831853;
+    let r = 4.0 + cleanHash(cell + 17.0) * 12.0;
+    let d1 = vec2f(cos(a), sin(a)) * r * texel;
+    let d2 = vec2f(-d1.y, d1.x);
+    let s0 = srcSample(uv + d1);
+    let s1 = srcSample(uv - d1);
+    let s2 = srcSample(uv + d2);
+    let s3 = srcSample(uv - d2);
+    let diff = max(max(abs(s0 - c), abs(s1 - c)), max(abs(s2 - c), abs(s3 - c)));
+    let band = 1.0 - smoothstep(0.008, 0.016, max(max(diff.r, diff.g), diff.b));
+    return mix(c, (s0 + s1 + s2 + s3) * 0.25, band);
 }
 `;

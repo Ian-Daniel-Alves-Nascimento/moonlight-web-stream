@@ -315,10 +315,18 @@ class ViewerApp implements Component {
                     const mode = (upscaler.algorithm == "auto" ? `auto -> ${level}` : level) + (upscaler.cleanup ? " + cleanup" : "")
                     const gpu = upscaler.gpuMs != null ? `GPU ${upscaler.gpuMs.toFixed(1)} ms, ` : ""
                     text += `
-Upscaler: ${mode} ${upscaler.input[0]}x${upscaler.input[1]} -> ${upscaler.output[0]}x${upscaler.output[1]} (${gpu}CPU ${upscaler.avgSubmitMs.toFixed(2)} ms, ${Math.round(upscaler.lateRatio * 100)}% late)`
+Upscaler: ${mode} ${upscaler.input[0]}x${upscaler.input[1]} -> ${upscaler.output[0]}x${upscaler.output[1]} (${gpu}CPU ${upscaler.avgSubmitMs.toFixed(2)} ms, ${Math.round(upscaler.lateRatio * 100)}% late, drawing ${Math.round(upscaler.drawnFps)} of ${Math.round(upscaler.videoFps)} fps)`
                     if (upscaler.governorReason) {
                         text += `\n  auto: ${upscaler.governorReason}`
                     }
+                }
+                // Lightning fork: where the picture cleanup runs, and whether it keeps up
+                const cleanup = this.getStream()?.getCleanupState()
+                if (cleanup && cleanup.where != "off") {
+                    const s = cleanup.stats
+                    text += `\nCleanup: ${cleanup.where}` + (s
+                        ? ` (${s.showing ? `drawing ${Math.round(s.drawnFps)} of ${Math.round(s.videoFps)} fps` : "hidden, the upscaler draws"}, CPU ${s.avgSubmitMs.toFixed(2)} ms, ${Math.round(s.lateRatio * 100)}% late)`
+                        : "")
                 }
                 this.statsDiv.innerText = text
             } else {

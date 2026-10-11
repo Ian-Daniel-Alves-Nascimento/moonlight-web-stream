@@ -333,18 +333,22 @@ export class Stream implements Component {
             this.debugLog(`Picture cleanup: not available with the ${renderer.implementationName} renderer`)
             return
         }
-        const ok = renderer.setCleanup(true, this.logger)
-        this.debugLog(ok ? "Picture cleanup: on" : "Picture cleanup: WebGL2 unavailable")
+        renderer.setCleanup(true, this.logger)
+        this.debugLog("Picture cleanup: on")
     }
     /// Lightning fork: switch the cleanup while streaming (sidebar).
-    setCleanup(on: boolean): boolean {
+    setCleanup(on: boolean) {
         const renderer = this.videoRenderer
         if (!(renderer instanceof VideoElementRenderer)) {
-            return false
+            return
         }
-        const ok = renderer.setCleanup(on, this.logger)
-        this.debugLog(`Picture cleanup: ${on ? (ok ? "on" : "unavailable") : "off"}`)
-        return ok
+        renderer.setCleanup(on, this.logger)
+        this.debugLog(`Picture cleanup: ${on ? "on" : "off"}`)
+    }
+    /// Lightning fork: where the cleanup runs (for the stats); null with another renderer.
+    getCleanupState(): ReturnType<VideoElementRenderer["getCleanupState"]> | null {
+        const renderer = this.videoRenderer
+        return renderer instanceof VideoElementRenderer ? renderer.getCleanupState() : null
     }
 
     /// Lightning fork: HDR highlights on an HDR screen over an SDR stream (video/auto_hdr.ts).
