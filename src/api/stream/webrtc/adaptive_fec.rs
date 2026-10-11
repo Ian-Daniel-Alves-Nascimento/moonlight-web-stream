@@ -73,9 +73,13 @@ impl AdaptiveFecInterceptor {
             let any = packet.as_any();
             let media = |ssrc: u32| Some(ssrc) != self.fec_ssrc;
             let lost = if let Some(rr) = any.downcast_ref::<ReceiverReport>() {
-                rr.reports.iter().any(|report| media(report.ssrc) && report.fraction_lost > 0)
+                rr.reports
+                    .iter()
+                    .any(|report| media(report.ssrc) && report.fraction_lost > 0)
             } else if let Some(sr) = any.downcast_ref::<SenderReport>() {
-                sr.reports.iter().any(|report| media(report.ssrc) && report.fraction_lost > 0)
+                sr.reports
+                    .iter()
+                    .any(|report| media(report.ssrc) && report.fraction_lost > 0)
             } else if let Some(nack) = any.downcast_ref::<TransportLayerNack>() {
                 media(nack.media_ssrc)
             } else {
@@ -262,8 +266,14 @@ mod tests {
         report(&mut fec, lossy, SSRC, 12);
         assert_eq!(20, send(&mut fec, lossy, &mut seq, 100));
         // ...and stays there until it has been clean for LOSS_HOLD
-        assert_eq!(20, send(&mut fec, lossy + Duration::from_secs(4), &mut seq, 100));
-        assert_eq!(5, send(&mut fec, lossy + Duration::from_secs(6), &mut seq, 100));
+        assert_eq!(
+            20,
+            send(&mut fec, lossy + Duration::from_secs(4), &mut seq, 100)
+        );
+        assert_eq!(
+            5,
+            send(&mut fec, lossy + Duration::from_secs(6), &mut seq, 100)
+        );
 
         // "Loss" on the repair stream itself is the repairs left home, not the network
         let later = lossy + Duration::from_secs(7);
