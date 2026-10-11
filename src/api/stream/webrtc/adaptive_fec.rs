@@ -128,7 +128,7 @@ impl Protocol<TaggedPacket, TaggedPacket, ()> for AdaptiveFecInterceptor {
             }
             self.fec_ssrc.get_or_insert(rtp.header.ssrc);
             self.repairs += 1;
-            if self.network_clean(packet.now) && self.repairs % KEEP_ONE_IN != 0 {
+            if self.network_clean(packet.now) && !self.repairs.is_multiple_of(KEEP_ONE_IN) {
                 // Clean network: this repair packet stays home
                 continue;
             }
@@ -212,16 +212,15 @@ mod tests {
                         ..Default::default()
                     },
                     payload: vec![0xAB; 1000].into(),
-                    ..Default::default()
                 })),
             })
             .expect("write");
             *seq = seq.wrapping_add(1);
             while let Some(out) = fec.poll_write() {
-                if let Packet::Rtp(p) = &out.message.packet {
-                    if p.header.payload_type == FEC_PT {
-                        repairs += 1;
-                    }
+                if let Packet::Rtp(p) = &out.message.packet
+                    && p.header.payload_type == FEC_PT
+                {
+                    repairs += 1;
                 }
             }
         }
