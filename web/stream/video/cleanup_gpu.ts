@@ -5,7 +5,9 @@
  * copying each frame to a texture blocks ~16.7 ms on an iPhone, and a 120 fps stream ended up
  * drawn at 60. Here the cost is only the shader. A canvas laid over the picture draws each
  * decoded frame cleaned up; it hides while the upscaler shows (which cleans up in its own pass)
- * and turns itself off for good when the device can't keep up.
+ * and turns itself off for good when the device can't keep up. Where the browser draws pages
+ * slower than the video (iPhone Safari: ~60 times a second), it stays and the player warns that
+ * it limits the picture to that rate (frame_rate.ts).
  *
  * Copyright (c) 2026 the author of Lightning Launcher (github.com/Ian-Daniel-Alves-Nascimento).
  * This program is free software: you can redistribute it and/or modify it under the terms of
@@ -17,6 +19,7 @@
 import { Logger } from "../log"
 import { getStreamRectCorrected } from "./index"
 import { CLEAN_WGSL } from "./cleanup_shaders"
+import { FrameRateMeter } from "./frame_rate"
 
 /// Frames counted before deciding this device can't keep up
 const MIN_FRAMES = 240
@@ -87,6 +90,8 @@ export class PictureCleanup {
     skip: (() => boolean) | null = null
     /// Called once when this device can't keep up and the cleanup turned itself off
     onGaveUp: (() => void) | null = null
+    /// Drawn vs the video's frame rate (the connection tells the video's where Safari doesn't)
+    readonly meter: FrameRateMeter
 
     private context: GPUCanvasContext
     private pipeline: GPURenderPipeline
@@ -97,11 +102,9 @@ export class PictureCleanup {
     private errorLogged = false
     private pending = 0
     private lateAverage = 0
-    private rateStart = 0
-    private rateDecoded = 0
-    private rateDrawn = 0
 
     private constructor(private video: HTMLVideoElement, private device: GPUDevice, private logger?: Logger) {
+        this.meter = new FrameRateMeter(video)
         const context = this.canvas.getContext("webgpu")
         if (!context) {
             throw "no WebGPU canvas"
@@ -189,7 +192,9 @@ export class PictureCleanup {
 
     private render() {
         const start = performance.now()
-        this.countRates(start)
+        this.meter.tick(start)
+        this.stats.videoFps = this.meter.videoFps
+        this.stats.drawnFps = this.meter.drawnFps
 
         const inW = this.video.videoWidth
         const inH = this.video.videoHeight
@@ -271,31 +276,5 @@ export class PictureCleanup {
         if (this.canvas.style.visibility != visibility) {
             this.canvas.style.visibility = visibility
         }
-    }
-
-    /// The video's decoded frame rate and the rate drawn here, once a second.
-    private countRates(now: number) {
-        this.rateDrawn++
-        if (this.rateStart == 0) {
-            this.rateStart = now
-            this.rateDecoded = this.video.getVideoPlaybackQuality?.().totalVideoFrames ?? 0
-            this.rateDrawn = 0
-            return
-        }
-        const elapsed = now - this.rateStart
-        if (elapsed < 1000) {
-            return
-        }
-        const decoded = this.video.getVideoPlaybackQuality?.().totalVideoFrames ?? 0
-        if (elapsed < 3000 && decoded >= this.rateDecoded) {
-            const videoFps = (decoded - this.rateDecoded) * 1000 / elapsed
-            const drawnFps = this.rateDrawn * 1000 / elapsed
-            // Smoothed; a pause (background, network stall) is skipped instead of counted
-            this.stats.videoFps = this.stats.videoFps == 0 ? videoFps : this.stats.videoFps * 0.7 + videoFps * 0.3
-            this.stats.drawnFps = this.stats.drawnFps == 0 ? drawnFps : this.stats.drawnFps * 0.7 + drawnFps * 0.3
-        }
-        this.rateStart = now
-        this.rateDecoded = decoded
-        this.rateDrawn = 0
     }
 }

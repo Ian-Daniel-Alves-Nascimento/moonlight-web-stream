@@ -345,6 +345,14 @@ export class Stream implements Component {
         renderer.setCleanup(on, this.logger)
         this.debugLog(`Picture cleanup: ${on ? "on" : "off"}`)
     }
+    /// Lightning fork: called once when Auto HDR or the cleanup limit the picture's frame rate
+    /// (the browser draws pages slower than the video, e.g. iPhone Safari at ~60)
+    onFrameLimit: ((limit: Parameters<NonNullable<VideoElementRenderer["onFrameLimit"]>>[0]) => void) | null = null
+    /// Lightning fork: Auto HDR's drawn vs video frame rate (for the stats)
+    getAutoHdrRates(): { drawnFps: number, videoFps: number } | null {
+        const renderer = this.videoRenderer
+        return renderer instanceof VideoElementRenderer ? renderer.getAutoHdrRates() : null
+    }
     /// Lightning fork: where the cleanup runs (for the stats); null with another renderer.
     getCleanupState(): ReturnType<VideoElementRenderer["getCleanupState"]> | null {
         const renderer = this.videoRenderer
@@ -827,6 +835,15 @@ export class Stream implements Component {
             pipelineCodecSupport = supportedCodecs
 
             videoRenderer.mount(this.divElement)
+            if (videoRenderer instanceof VideoElementRenderer) {
+                // Lightning fork: Safari doesn't count the frames of a WebRTC video, the frame
+                // rate checks (video/frame_rate.ts) learn the decoded rate from the connection
+                videoRenderer.setFramesDecodedSource(() => this.transport?.getFramesDecoded?.() ?? Promise.resolve(null))
+                videoRenderer.onFrameLimit = limit => {
+                    this.debugLog(`Frame rate: the page draws ${Math.round(limit.drawnFps)} of the video's ${Math.round(limit.videoFps)} fps (Auto HDR ${limit.autoHdr ? "on" : "off"}, cleanup ${limit.cleanup ? "on" : "off"})`)
+                    this.onFrameLimit?.(limit)
+                }
+            }
             this.enableUpscaling(videoRenderer)
             this.enableCleanup(videoRenderer)
             this.enableAutoHdr(videoRenderer)

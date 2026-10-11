@@ -28,6 +28,7 @@
 import { Logger } from "../log"
 import { getStreamRectCorrected } from "./index"
 import { CLEAN_WGSL } from "./cleanup_shaders"
+import { FrameRateMeter } from "./frame_rate"
 
 export type AutoHdrStrength = "low" | "medium" | "high"
 
@@ -187,8 +188,12 @@ export class AutoHdr {
     private upscaledSource: (() => HTMLCanvasElement | null) | null = null
     /// Lightning fork: the picture cleanup in this pass (only when the source is the video)
     private cleanup = false
+    /// Lightning fork: drawn vs the video's frame rate (a browser may draw pages slower than the
+    /// video plays, see frame_rate.ts)
+    readonly meter: FrameRateMeter
 
     private constructor(private video: HTMLVideoElement, private device: GPUDevice, private strength: AutoHdrStrength, private logger?: Logger) {
+        this.meter = new FrameRateMeter(video)
         const context = this.canvas.getContext("webgpu")
         if (!context) {
             throw "no WebGPU canvas"
@@ -283,6 +288,7 @@ export class AutoHdr {
         if (!this.running) {
             return
         }
+        this.meter.tick(performance.now())
         // The upscaler draws first and hands its canvas over (renderFrom); otherwise the video
         if (!this.upscaledSource?.()) {
             this.guard(() => this.render(null))

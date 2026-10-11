@@ -320,6 +320,10 @@ Upscaler: ${mode} ${upscaler.input[0]}x${upscaler.input[1]} -> ${upscaler.output
                         text += `\n  auto: ${upscaler.governorReason}`
                     }
                 }
+                const hdrRates = this.getStream()?.getAutoHdrRates()
+                if (hdrRates) {
+                    text += `\nAuto HDR: drawing ${Math.round(hdrRates.drawnFps)} of ${Math.round(hdrRates.videoFps)} fps`
+                }
                 // Lightning fork: where the picture cleanup runs, and whether it keeps up
                 const cleanup = this.getStream()?.getCleanupState()
                 if (cleanup && cleanup.where != "off") {
@@ -366,6 +370,13 @@ Upscaler: ${mode} ${upscaler.input[0]}x${upscaler.input[1]} -> ${upscaler.output
         this.toggleFullscreenWithKeybind = settings.toggleFullscreenWithKeybind
 
         this.stream = new Stream(this.api, hostId, appId, settings, [browserWidth, browserHeight], bootstrapRole.permissions)
+        // Lightning fork: Auto HDR and the picture cleanup draw at the browser's page rate
+        this.stream.onFrameLimit = limit => {
+            const text = frameLimitText(limit)
+            if (text) {
+                showNotification(text, "warn")
+            }
+        }
         this.startStream(settings)
 
         // Configure input
@@ -1621,6 +1632,22 @@ function touchToGamepadState(touch: TouchGamepadState): GamepadState {
 
 const SVG_EYE_OFF = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18"/><path d="M10.6 5.1A9.8 9.8 0 0 1 12 5c5 0 9 4.5 10 7a13.4 13.4 0 0 1-3.1 4.2M6.5 6.6A13.2 13.2 0 0 0 2 12c1 2.5 5 7 10 7a9.6 9.6 0 0 0 4.3-1"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>`
 const SVG_MORE = `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>`
+
+/// Lightning fork: the warning when Auto HDR / the cleanup limit the frame rate; "" if neither is on.
+function frameLimitText(limit: { drawnFps: number, videoFps: number, autoHdr: boolean, cleanup: boolean }): string {
+    const features = [limit.autoHdr ? I.stream.frameLimitHdr : null, limit.cleanup ? I.stream.frameLimitCleanup : null]
+        .filter(feature => feature != null).join(I.stream.frameLimitAnd)
+    if (!features) {
+        return ""
+    }
+    const video = String(Math.round(limit.videoFps))
+    let text = I.stream.frameLimitWarning.replace("{features}", features).replace("{fps}", String(Math.round(limit.drawnFps))).split("{video}").join(video)
+    // iPhone / iPad: Safari's own setting lifts the limit
+    if (/iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform == "MacIntel" && navigator.maxTouchPoints > 1)) {
+        text += " " + I.stream.frameLimitSafari
+    }
+    return text
+}
 
 function rememberCleanupChoice(choice: "auto" | "off") {
     try {

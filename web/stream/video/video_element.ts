@@ -9,6 +9,7 @@ import { Logger } from "../log"
 import { VideoUpscaler } from "./upscale"
 import { AutoHdr, AutoHdrStrength } from "./auto_hdr"
 import { PictureCleanup, PictureCleanupStats } from "./cleanup_gpu"
+import { FrameRateMeter } from "./frame_rate"
 
 const VIDEO_DECODER_CODECS: Record<keyof VideoFormats, string> = {
     "h264": "avc1.42E01E",
@@ -237,6 +238,7 @@ export class VideoElementRenderer implements TrackVideoRenderer, VideoRenderer {
                 return
             } else {
                 this.gpuCleanup = cleanup
+                this.watchFrameRate(cleanup.meter)
                 cleanup.onGaveUp = () => {
                     // Too slow even without a copy: WebGL would do worse, the plain video shows
                     if (this.gpuCleanup == cleanup) {
@@ -254,6 +256,37 @@ export class VideoElementRenderer implements TrackVideoRenderer, VideoRenderer {
         })
     }
     private gpuCleanupGaveUp = false
+    private framesDecodedSource: (() => Promise<number | null>) | null = null
+    /// Lightning fork: where the cleanup learns the video's decoded frame rate when the <video>
+    /// doesn't say (Safari with WebRTC).
+    setFramesDecodedSource(source: () => Promise<number | null>) {
+        this.framesDecodedSource = source
+        if (this.gpuCleanup) {
+            this.gpuCleanup.meter.framesDecoded = source
+        }
+        if (this.autoHdr) {
+            this.autoHdr.meter.framesDecoded = source
+        }
+    }
+    /// Lightning fork: called once when Auto HDR or the picture cleanup has been drawing fewer
+    /// frames than the video (the browser's limit, e.g. iPhone Safari at ~60): they limit the
+    /// picture to that rate, the player says so.
+    onFrameLimit: ((limit: { drawnFps: number, videoFps: number, autoHdr: boolean, cleanup: boolean }) => void) | null = null
+    private frameLimitReported = false
+    private watchFrameRate(meter: FrameRateMeter) {
+        meter.framesDecoded = this.framesDecodedSource
+        meter.onLimited = (drawnFps, videoFps) => {
+            if (this.frameLimitReported) {
+                return
+            }
+            this.frameLimitReported = true
+            this.onFrameLimit?.({ drawnFps, videoFps, autoHdr: this.autoHdr != null, cleanup: this.cleanupWanted })
+        }
+    }
+    /// Lightning fork: Auto HDR's drawn vs video frame rate, for the stats.
+    getAutoHdrRates(): { drawnFps: number, videoFps: number } | null {
+        return this.autoHdr ? { drawnFps: this.autoHdr.meter.drawnFps, videoFps: this.autoHdr.meter.videoFps } : null
+    }
     /// Lightning fork: where the cleanup runs right now, for the stats.
     getCleanupState(): { where: string, stats: PictureCleanupStats | null } {
         if (!this.cleanupWanted) {
@@ -292,6 +325,7 @@ export class VideoElementRenderer implements TrackVideoRenderer, VideoRenderer {
             return true
         }
         this.autoHdr = autoHdr
+        this.watchFrameRate(autoHdr.meter)
         this.refreshCleanup()
         this.placeAutoHdr()
         return true

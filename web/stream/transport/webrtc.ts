@@ -369,6 +369,16 @@ export class WebRTCTransport implements Transport {
     private lastFramesDecoded = 0
     // Lightning fork: rates between two readings (latency panel)
     private last: { time: number, bytes: number, lost: number, received: number, keyFrames: number, jbDelay: number, jbCount: number } | null = null
+    async getFramesDecoded(): Promise<number | null> {
+        const stats = await this.peer.getStats()
+        let frames: number | null = null
+        stats.forEach(report => {
+            if (report.type == "inbound-rtp" && report.kind == "video" && typeof report.framesDecoded == "number") {
+                frames = report.framesDecoded
+            }
+        })
+        return frames
+    }
     async getStats(): Promise<Record<string, StatValue>> {
         const out: Record<string, StatValue> = {}
 

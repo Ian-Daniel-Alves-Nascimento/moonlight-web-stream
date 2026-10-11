@@ -57,6 +57,9 @@ export interface Transport {
     setAudioPipeline(type: "data", pipeline: (DataPipe & AudioPlayer)): Promise<void>
 
     getStats(): Promise<Record<string, StatValue>>
+    /// Lightning fork: video frames decoded so far (null when unknown). Separate from getStats,
+    /// which keeps the stats panel's deltas.
+    getFramesDecoded?(): Promise<number | null>
 }
 
 export function generateControlPacketConfig(): ControlPacketConfig {
