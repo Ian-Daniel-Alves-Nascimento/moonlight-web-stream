@@ -33,7 +33,7 @@ use moonlight_common::webrtc::header::WebRTCLinkHeader;
 use moonlight_common::webrtc::offer::WebRTCSessionOffer;
 use moonlight_common::webrtc::sdp::Session;
 use rtc::ice::network_type::NetworkType;
-use rtc::interceptor::{FlexFec03SendBuilder, Registry, Slot};
+use rtc::interceptor::{FlexFec03SendBuilder, PacerBuilder, Registry, Slot};
 use rtc::peer_connection::configuration::media_engine::{MIME_TYPE_FLEX_FEC03, MIME_TYPE_OPUS};
 use rtc::rtp_transceiver::rtp_sender::{
     RTCPFeedback, RTCRtpCodec, RTCRtpCodecParameters, RTCRtpHeaderExtensionCapability, RtpCodecKind,
@@ -66,6 +66,7 @@ use crate::app::{AppError, user::AuthenticatedUser};
 
 const FLEX_FEC_PAYLOAD_TYPE: u8 = 49;
 
+mod adaptive_fec;
 mod audio;
 mod control;
 mod convert;
@@ -495,13 +496,27 @@ pub async fn webrtc_post(
         Registry::new()
             .with(
                 Slot::FecEncoder,
-                FlexFec03SendBuilder::default()
-                    // 1 to 5 ratio = 20% fec
-                    // moonlight uses 20% by default
-                    .with_num_media_packets(5)
-                    .with_num_fec_packets(1)
-                    .build(),
+                // Lightning fork: 20% (1 repair per 5 media packets, Moonlight's default) only while
+                // the network loses packets; ~5% while it is clean (see adaptive_fec.rs)
+                adaptive_fec::AdaptiveFecInterceptor::new(
+                    FlexFec03SendBuilder::default()
+                        .with_num_media_packets(5)
+                        .with_num_fec_packets(1)
+                        .build(),
+                    FLEX_FEC_PAYLOAD_TYPE,
+                ),
             )
+            // Lightning fork: a normal frame leaves at once (the burst is one average frame), only
+            // the huge ones (key frames, scene cuts) are spread at 4x the stream's bitrate: in one
+            // burst they overflow a Wi-Fi router's queue and come back as loss
+            .with(Slot::Pacer, {
+                let bits_per_second = (session.bitrate.max(1_000) as f64) * 1000.0;
+                let frame_bits = bits_per_second / (session.fps.max(1) as f64);
+                PacerBuilder::new()
+                    .with_target_bitrate(bits_per_second * 4.0)
+                    .with_burst_bits(frame_bits.max(64.0 * 1024.0 * 8.0))
+                    .build()
+            })
             // FIR and PLI need Interceptor, See https://github.com/webrtc-rs/webrtc/blob/deaddd32dc4f5f6da06c6267e1bf2e25a64fe222/examples/rtcp-processing/rtcp-processing.rs
             .with(Slot::from(14_000), RtcpForwarderInterceptor::default()),
         &mut media_engine,

@@ -19,6 +19,13 @@ import { getStreamRectCorrected } from "./index"
 import { nisCoefTexture, nisConfig, nisScaleInRange } from "./upscale_nis_tables"
 import { BLIT_FS, EASU_FS, NIS_FS, RCAS_FS, SGSR_FS, VS } from "./upscale_shaders"
 import { UpscalingGovernor, UpscalingLevel } from "./upscale_governor"
+import { CLEAN_FS } from "./cleanup_shaders"
+
+/// Lightning fork: "none" = no upscaler, only the picture cleanup (straight to the screen)
+export type UpscalerMode = UpscalingAlgorithm | "none"
+/// Lightning fork: the cleanup turns itself off when the device can't keep up with it
+const CLEANUP_LATE_LIMIT = 0.3
+const CLEANUP_MIN_FRAMES = 240
 
 type Program = {
     program: WebGLProgram
@@ -26,11 +33,13 @@ type Program = {
 }
 
 export type UpscalerStats = {
-    /// What was picked: an upscaler, or "auto" (the governor picks the level).
-    algorithm: UpscalingAlgorithm
+    /// What was picked: an upscaler, or "auto" (the governor picks the level), or "none" (cleanup only).
+    algorithm: UpscalerMode
     /// What actually ran on the last frame (NIS falls back to FSR 1 outside its 2× range);
     /// null while "auto" has turned the upscaling off.
-    lastAlgorithm: UpscalingLevel | null
+    lastAlgorithm: UpscalingLevel | "none" | null
+    /// Lightning fork: the picture cleanup ran on the last frame
+    cleanup: boolean
     frames: number
     input: [number, number]
     output: [number, number]
@@ -55,9 +64,11 @@ const NIS_SHARPNESS = 0.5
 export class VideoUpscaler {
     /// Returns null when WebGL2 is unavailable or a shader fails to build; the caller keeps
     /// showing the plain video.
-    static create(video: HTMLVideoElement, algorithm: UpscalingAlgorithm, logger?: Logger): VideoUpscaler | null {
+    static create(video: HTMLVideoElement, algorithm: UpscalerMode, logger?: Logger, cleanup = false): VideoUpscaler | null {
         try {
-            return new VideoUpscaler(video, algorithm, logger)
+            const upscaler = new VideoUpscaler(video, algorithm, logger)
+            upscaler.setCleanup(cleanup || algorithm == "none")
+            return upscaler
         } catch (error) {
             logger?.debug(`Upscaling unavailable: ${error}`)
             return null
@@ -78,6 +89,13 @@ export class VideoUpscaler {
 
     private easu: Program
     private rcas: Program
+    // Lightning fork: picture cleanup before the upscaler (cleanup_shaders.ts)
+    private clean: Program | null = null
+    private cleanTex: WebGLTexture | null = null
+    private cleanFbo: WebGLFramebuffer | null = null
+    private cleanSize: [number, number] = [0, 0]
+    private cleanupOn = false
+    private cleanupGaveUp = false
     private blit: Program
     private sgsr: Program | null = null
     private nis: Program | null = null
@@ -103,10 +121,11 @@ export class VideoUpscaler {
     private frameIntervalMs = 1000 / 60
     private lateAverage = 0
 
-    private constructor(private video: HTMLVideoElement, readonly algorithm: UpscalingAlgorithm, private logger?: Logger) {
+    private constructor(private video: HTMLVideoElement, readonly algorithm: UpscalerMode, private logger?: Logger) {
         this.stats = {
             algorithm,
             lastAlgorithm: null,
+            cleanup: false,
             frames: 0,
             input: [0, 0],
             output: [0, 0],
@@ -173,6 +192,28 @@ export class VideoUpscaler {
         this.timerExt = gl.getExtension("EXT_disjoint_timer_query_webgl2")
     }
 
+    /// Lightning fork: picture cleanup on or off. False when its shader can't be built (then
+    /// only the upscaler runs, or, in cleanup-only mode, the plain video shows).
+    setCleanup(on: boolean): boolean {
+        if (on && !this.clean) {
+            try {
+                this.clean = this.createProgram(CLEAN_FS, ["uTex", "uTexel", "uDither"])
+                this.cleanTex = this.createTexture(this.gl.LINEAR)
+                this.cleanFbo = this.gl.createFramebuffer()
+            } catch (error) {
+                this.logger?.debug(`Picture cleanup unavailable: ${error}`)
+                this.cleanupOn = false
+                return false
+            }
+        }
+        this.cleanupOn = on
+        this.cleanupGaveUp = false
+        return true
+    }
+    isCleanupOn(): boolean {
+        return this.cleanupOn && !this.cleanupGaveUp
+    }
+
     /// Builds the extra program a level needs; false when it can't be built.
     private ensureLevelProgram(level: UpscalingLevel): boolean {
         if (this.brokenLevels.has(level)) {
@@ -222,7 +263,13 @@ export class VideoUpscaler {
         this.unmount()
 
         const gl = this.gl
-        for (const program of [this.easu, this.rcas, this.blit, this.sgsr, this.nis]) {
+        if (this.cleanTex) {
+            gl.deleteTexture(this.cleanTex)
+        }
+        if (this.cleanFbo) {
+            gl.deleteFramebuffer(this.cleanFbo)
+        }
+        for (const program of [this.easu, this.rcas, this.blit, this.sgsr, this.nis, this.clean]) {
             if (program) {
                 gl.deleteProgram(program.program)
             }
@@ -305,11 +352,19 @@ export class VideoUpscaler {
 
         const start = performance.now()
         const sample = this.measure(start)
-        const algorithm = this.pickLevel(inW, inH, outW, outH, sample, start)
+        const algorithm: UpscalingLevel | "none" = this.algorithm == "none" ? "none" : this.pickLevel(inW, inH, outW, outH, sample, start)
+
+        // The cleanup is one more pass per frame: on a device that can't fit it, it goes away
+        if (this.isCleanupOn() && this.stats.frames > CLEANUP_MIN_FRAMES && this.stats.lateRatio > CLEANUP_LATE_LIMIT) {
+            this.cleanupGaveUp = true
+            this.logger?.debug(`Picture cleanup: off, this device can't keep up (${Math.round(this.stats.lateRatio * 100)}% late)`)
+        }
+        const cleanup = this.isCleanupOn() && this.clean != null
 
         this.stats.input = [inW, inH]
         this.stats.output = [outW, outH]
-        if (algorithm == "off") {
+        this.stats.cleanup = cleanup
+        if (algorithm == "off" || (algorithm == "none" && !cleanup)) {
             // "auto" turned it off: the plain video shows through
             this.canvas.style.visibility = "hidden"
             this.stats.lastAlgorithm = null
@@ -323,13 +378,38 @@ export class VideoUpscaler {
 
         gl.bindVertexArray(this.vao)
 
+        // Lightning fork: the cleanup first, at the frame's own size; the upscaler then reads its
+        // result instead of the raw frame. Alone, it draws straight to the screen with dither.
+        let source = this.inputTex
+        if (cleanup && this.clean) {
+            const toScreen = algorithm == "none"
+            if (toScreen) {
+                gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+                gl.viewport(0, 0, outW, outH)
+            } else {
+                this.ensureCleanTarget(inW, inH)
+                gl.bindFramebuffer(gl.FRAMEBUFFER, this.cleanFbo)
+                gl.viewport(0, 0, inW, inH)
+            }
+            gl.activeTexture(gl.TEXTURE0)
+            gl.bindTexture(gl.TEXTURE_2D, this.inputTex)
+            gl.useProgram(this.clean.program)
+            gl.uniform1i(this.clean.uniforms.uTex, 0)
+            gl.uniform2f(this.clean.uniforms.uTexel, 1 / inW, 1 / inH)
+            gl.uniform1f(this.clean.uniforms.uDither, toScreen ? 1 : 0)
+            gl.drawArrays(gl.TRIANGLES, 0, 3)
+            if (!toScreen && this.cleanTex) {
+                source = this.cleanTex
+            }
+        }
+
         if (algorithm == "fsr1" || algorithm == "sharpen") {
             // Pass 1 into the intermediate texture: EASU (FSR 1) or a plain bilinear stretch.
             this.ensureIntermediate(outW, outH)
             gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo)
             gl.viewport(0, 0, outW, outH)
             gl.activeTexture(gl.TEXTURE0)
-            gl.bindTexture(gl.TEXTURE_2D, this.inputTex)
+            gl.bindTexture(gl.TEXTURE_2D, source)
             if (algorithm == "fsr1") {
                 gl.useProgram(this.easu.program)
                 gl.uniform1i(this.easu.uniforms.uTex, 0)
@@ -352,7 +432,7 @@ export class VideoUpscaler {
             gl.bindFramebuffer(gl.FRAMEBUFFER, null)
             gl.viewport(0, 0, outW, outH)
             gl.activeTexture(gl.TEXTURE0)
-            gl.bindTexture(gl.TEXTURE_2D, this.inputTex)
+            gl.bindTexture(gl.TEXTURE_2D, source)
             gl.useProgram(this.sgsr.program)
             gl.uniform1i(this.sgsr.uniforms.uTex, 0)
             gl.uniform4f(this.sgsr.uniforms.uView, 1 / inW, 1 / inH, inW, inH)
@@ -363,7 +443,7 @@ export class VideoUpscaler {
             gl.bindFramebuffer(gl.FRAMEBUFFER, null)
             gl.viewport(0, 0, outW, outH)
             gl.activeTexture(gl.TEXTURE0)
-            gl.bindTexture(gl.TEXTURE_2D, this.inputTex)
+            gl.bindTexture(gl.TEXTURE_2D, source)
             gl.activeTexture(gl.TEXTURE1)
             gl.bindTexture(gl.TEXTURE_2D, this.coefTex)
             gl.useProgram(this.nis.program)
@@ -441,7 +521,8 @@ export class VideoUpscaler {
                 }
                 return "fsr1"
             }
-            return this.algorithm
+            // "none" never gets here (render() skips the upscaler); "off" keeps the plain video
+            return this.algorithm == "none" ? "off" : this.algorithm
         }
 
         const key = `${LEVEL_STORAGE_PREFIX}${inW}x${inH}>${outW}x${outH}`
@@ -495,6 +576,19 @@ export class VideoUpscaler {
             this.inputSize = [inW, inH]
         }
         gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, this.video)
+    }
+
+    private ensureCleanTarget(width: number, height: number) {
+        if (!this.cleanTex || !this.cleanFbo || (this.cleanSize[0] == width && this.cleanSize[1] == height)) {
+            return
+        }
+        const gl = this.gl
+        gl.bindTexture(gl.TEXTURE_2D, this.cleanTex)
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
+        gl.bindFramebuffer(gl.FRAMEBUFFER, this.cleanFbo)
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.cleanTex, 0)
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+        this.cleanSize = [width, height]
     }
 
     private ensureIntermediate(width: number, height: number) {

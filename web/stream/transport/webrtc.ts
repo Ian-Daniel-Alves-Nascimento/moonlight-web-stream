@@ -438,11 +438,13 @@ export class WebRTCTransport implements Transport {
                 const prev = this.last
                 if (prev && now - prev.time >= 250) {
                     const seconds = (now - prev.time) / 1000
-                    out.receivedMbps = (cur.bytes - prev.bytes) * 8 / seconds / 1_000_000
+                    // One decimal: the raw list prints numbers as they are
+                    const round1 = (x: number) => Math.round(x * 10) / 10
+                    out.receivedMbps = round1((cur.bytes - prev.bytes) * 8 / seconds / 1_000_000)
                     const lost = cur.lost - prev.lost
                     const total = lost + (cur.received - prev.received)
-                    out.lossPercent = total > 0 ? lost / total * 100 : 0
-                    out.keyFramesPerMinute = (cur.keyFrames - prev.keyFrames) / seconds * 60
+                    out.lossPercent = round1(total > 0 ? lost / total * 100 : 0)
+                    out.keyFramesPerMinute = round1((cur.keyFrames - prev.keyFrames) / seconds * 60)
                     if (cur.jbCount > prev.jbCount) {
                         out.jitterBufferMs = (cur.jbDelay - prev.jbDelay) / (cur.jbCount - prev.jbCount) * 1000
                     }

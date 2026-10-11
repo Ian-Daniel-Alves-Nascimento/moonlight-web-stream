@@ -323,6 +323,30 @@ export class Stream implements Component {
         return ok
     }
 
+    /// Lightning fork: picture cleanup (deblock in flat areas, deband, dither) on every frame,
+    /// before the upscaler or alone (video/cleanup_shaders.ts). Not on an HDR stream.
+    private enableCleanup(renderer: VideoRenderer) {
+        if ((this.settings.imageCleanup ?? "auto") == "off" || this.settings.hdr) {
+            return
+        }
+        if (!(renderer instanceof VideoElementRenderer)) {
+            this.debugLog(`Picture cleanup: not available with the ${renderer.implementationName} renderer`)
+            return
+        }
+        const ok = renderer.setCleanup(true, this.logger)
+        this.debugLog(ok ? "Picture cleanup: on" : "Picture cleanup: WebGL2 unavailable")
+    }
+    /// Lightning fork: switch the cleanup while streaming (sidebar).
+    setCleanup(on: boolean): boolean {
+        const renderer = this.videoRenderer
+        if (!(renderer instanceof VideoElementRenderer)) {
+            return false
+        }
+        const ok = renderer.setCleanup(on, this.logger)
+        this.debugLog(`Picture cleanup: ${on ? (ok ? "on" : "unavailable") : "off"}`)
+        return ok
+    }
+
     /// Lightning fork: HDR highlights on an HDR screen over an SDR stream (video/auto_hdr.ts).
     /// A real HDR stream is left alone.
     private enableAutoHdr(renderer: VideoRenderer) {
@@ -800,6 +824,7 @@ export class Stream implements Component {
 
             videoRenderer.mount(this.divElement)
             this.enableUpscaling(videoRenderer)
+            this.enableCleanup(videoRenderer)
             this.enableAutoHdr(videoRenderer)
 
             await videoRenderer.setup(videoSetup)

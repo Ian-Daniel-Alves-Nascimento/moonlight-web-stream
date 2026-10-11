@@ -202,6 +202,8 @@ class ViewerApp implements Component {
     upscalingChoice: string = "off"
     /// Lightning fork: Auto HDR picked at start ("off" or a strength), read by the sidebar.
     autoHdrChoice: string = "medium"
+    /// Lightning fork: picture cleanup picked at start ("auto" or "off"), read by the sidebar.
+    cleanupChoice: string = "auto"
     /// Lightning fork: fps asked of the PC (latency panel)
     private requestedFps = 60
     /// Lightning fork: progress/failure screen shown while connecting and when the stream stops.
@@ -264,6 +266,7 @@ class ViewerApp implements Component {
         this.upscalingChoice = settings.upscaling ? settings.upscalingAlgorithm : "off"
         this.requestedFps = settings.fps
         this.autoHdrChoice = settings.hdr ? "off" : (settings.autoHdr ?? "medium")
+        this.cleanupChoice = settings.hdr ? "off" : (settings.imageCleanup ?? "auto")
 
         this.touchGamepadMode = settings.touchGamepad ?? "auto"
         this.touchGamepadOptions = {
@@ -309,7 +312,7 @@ class ViewerApp implements Component {
                 const upscaler = this.getStream()?.getUpscalerStats()
                 if (upscaler) {
                     const level = upscaler.lastAlgorithm ?? "off"
-                    const mode = upscaler.algorithm == "auto" ? `auto -> ${level}` : level
+                    const mode = (upscaler.algorithm == "auto" ? `auto -> ${level}` : level) + (upscaler.cleanup ? " + cleanup" : "")
                     const gpu = upscaler.gpuMs != null ? `GPU ${upscaler.gpuMs.toFixed(1)} ms, ` : ""
                     text += `
 Upscaler: ${mode} ${upscaler.input[0]}x${upscaler.input[1]} -> ${upscaler.output[0]}x${upscaler.output[1]} (${gpu}CPU ${upscaler.avgSubmitMs.toFixed(2)} ms, ${Math.round(upscaler.lateRatio * 100)}% late)`
@@ -1611,6 +1614,16 @@ function touchToGamepadState(touch: TouchGamepadState): GamepadState {
 const SVG_EYE_OFF = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18"/><path d="M10.6 5.1A9.8 9.8 0 0 1 12 5c5 0 9 4.5 10 7a13.4 13.4 0 0 1-3.1 4.2M6.5 6.6A13.2 13.2 0 0 0 2 12c1 2.5 5 7 10 7a9.6 9.6 0 0 0 4.3-1"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>`
 const SVG_MORE = `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>`
 
+function rememberCleanupChoice(choice: "auto" | "off") {
+    try {
+        const stored = JSON.parse(localStorage.getItem("mlSettings") ?? "{}")
+        stored.imageCleanup = choice
+        localStorage.setItem("mlSettings", JSON.stringify(stored))
+    } catch {
+        // Storage unavailable: only this stream changes
+    }
+}
+
 function rememberAutoHdrChoice(choice: AutoHdrStrength | "off") {
     try {
         const stored = JSON.parse(localStorage.getItem("mlSettings") ?? "{}")
@@ -1723,6 +1736,7 @@ class ViewerSidebar implements Component, Sidebar {
     private mouseMode: SegmentedChoice
     private touchGamepad: SegmentedChoice
     private autoHdr: SegmentedChoice
+    private cleanup: SegmentedChoice
 
     constructor(app: ViewerApp) {
         this.app = app
@@ -1844,6 +1858,17 @@ class ViewerSidebar implements Component, Sidebar {
         this.resolutionCaption.classList.add("lt-menu-caption")
         imageSection.appendChild(this.resolutionCaption)
 
+        // Picture cleanup (Lightning fork), switched live to compare
+        this.cleanup = new SegmentedChoice("imageCleanup", [
+            { value: "off", name: I.stream.cleanupOff },
+            { value: "auto", name: I.stream.cleanupOn },
+        ], this.app.cleanupChoice, this.onCleanupChange.bind(this))
+        const cleanupSection = this.addSection(I.stream.sectionCleanup, this.cleanup)
+        const cleanupCaption = document.createElement("p")
+        cleanupCaption.classList.add("lt-menu-caption")
+        cleanupCaption.innerText = I.stream.cleanupCaption
+        cleanupSection.appendChild(cleanupCaption)
+
         // Auto HDR (Lightning fork): only shown where the screen and the browser can do it
         this.autoHdr = new SegmentedChoice("autoHdr", [
             { value: "off", name: I.stream.autoHdrOff },
@@ -1903,6 +1928,12 @@ class ViewerSidebar implements Component, Sidebar {
         section.append(header, choice.root)
         this.div.appendChild(section)
         return section
+    }
+
+    // -- Picture cleanup
+    private onCleanupChange(value: string) {
+        rememberCleanupChoice(value as "auto" | "off")
+        this.app.getStream()?.setCleanup(value != "off")
     }
 
     // -- Auto HDR

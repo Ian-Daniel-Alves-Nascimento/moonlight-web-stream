@@ -74,6 +74,9 @@ const trueDefaultSettings: Settings =
     // Lightning fork: HDR highlights on an HDR screen over an SDR stream. possible values:
     // "off", "low", "medium", "high" (only where the screen and the browser can show HDR)
     "autoHdr": "medium",
+    // Lightning fork: picture cleanup (blocks in flat areas, banding, dither). "auto" = on where
+    // the device keeps up (it turns itself off otherwise), "off"
+    "imageCleanup": "auto",
     "useSelectElementPolyfill": false
 }
 

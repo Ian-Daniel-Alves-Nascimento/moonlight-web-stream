@@ -61,6 +61,8 @@ export type Settings = {
     /// Lightning fork: HDR highlights on an HDR screen over an SDR stream (only where the screen
     /// and the browser can show them)
     autoHdr: AutoHdrStrength | "off"
+    /// Lightning fork: picture cleanup (blocks in flat areas, banding) on every frame
+    imageCleanup: "auto" | "off"
     useSelectElementPolyfill: boolean
 }
 
@@ -233,6 +235,7 @@ export class StreamSettingsComponent implements Component {
 
     private touchGamepad: SelectComponent
     private autoHdr: SelectComponent
+    private imageCleanup: SelectComponent
     private touchGamepadLayout: SelectComponent
     private touchGamepadSize: InputComponent
     private touchGamepadOpacity: InputComponent
@@ -568,6 +571,17 @@ export class StreamSettingsComponent implements Component {
             this.controllerInvertXY.setEnabled(false)
         }
 
+        // Picture cleanup (Lightning fork)
+        this.imageCleanup = new SelectComponent("imageCleanup", [
+            { value: "auto", name: i.imageCleanupOn },
+            { value: "off", name: i.imageCleanupOff },
+        ], {
+            displayName: i.imageCleanup,
+            preSelectedOption: settings?.imageCleanup ?? defaultSettings_.imageCleanup ?? "auto"
+        })
+        this.imageCleanup.addChangeListener(this.onSettingsChange.bind(this))
+        this.imageCleanup.mount(this.divElement)
+
         // Auto HDR (Lightning fork)
         this.autoHdr = new SelectComponent("autoHdr", [
             { value: "medium", name: i.autoHdrMedium },
@@ -726,7 +740,7 @@ export class StreamSettingsComponent implements Component {
         const quality = settingsGroup(this.divElement, i.groupQuality)
         for (const component of [
             this.videoSize, this.videoSizeWidth, this.videoSizeHeight, this.fps, this.bitrateAuto, this.bitrate,
-            this.upscaling, this.upscalingAlgorithm, this.upscalingRenderScale, this.videoCodec, this.autoHdr, this.hdr,
+            this.upscaling, this.upscalingAlgorithm, this.upscalingRenderScale, this.videoCodec, this.imageCleanup, this.autoHdr, this.hdr,
         ]) {
             component.mount(quality)
         }
@@ -847,6 +861,7 @@ export class StreamSettingsComponent implements Component {
 
         settings.hdr = this.hdr.isChecked()
         settings.autoHdr = (this.autoHdr.getValue() ?? "medium") as AutoHdrStrength | "off"
+        settings.imageCleanup = (this.imageCleanup.getValue() ?? "auto") as "auto" | "off"
 
         settings.useSelectElementPolyfill = this.useSelectElementPolyfill.isChecked()
 

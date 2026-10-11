@@ -74,6 +74,10 @@ export class VideoElementRenderer implements TrackVideoRenderer, VideoRenderer {
     private upscaler: VideoUpscaler | null = null
     /// Lightning fork: HDR highlights over the picture (or over the upscaler), see auto_hdr.ts
     private autoHdr: AutoHdr | null = null
+    /// Lightning fork: picture cleanup wanted (cleanup_shaders.ts); runs inside the upscaler, or
+    /// in a cleanup-only one when upscaling is off
+    private cleanupWanted = false
+    private pipelineLogger?: Logger
 
     constructor() {
         this.videoElement.classList.add("video-stream")
@@ -142,8 +146,9 @@ export class VideoElementRenderer implements TrackVideoRenderer, VideoRenderer {
     /// Lightning fork: upscale on this device. Returns false when it can't (no WebGL2, shader
     /// failure); the plain video keeps showing.
     enableUpscaling(algorithm: UpscalingAlgorithm, logger?: Logger): boolean {
+        this.pipelineLogger = logger ?? this.pipelineLogger
         this.upscaler?.destroy()
-        this.upscaler = VideoUpscaler.create(this.videoElement, algorithm, logger)
+        this.upscaler = VideoUpscaler.create(this.videoElement, algorithm, logger, this.cleanupWanted)
         if (this.upscaler && this.videoElement.isConnected) {
             this.upscaler.mount()
         }
@@ -157,7 +162,38 @@ export class VideoElementRenderer implements TrackVideoRenderer, VideoRenderer {
     disableUpscaling() {
         this.upscaler?.destroy()
         this.upscaler = null
+        // The cleanup keeps going on its own
+        if (this.cleanupWanted) {
+            this.startCleanupOnly()
+        }
         this.placeAutoHdr()
+    }
+
+    /// Lightning fork: picture cleanup on/off, live. False when this device can't run it.
+    setCleanup(on: boolean, logger?: Logger): boolean {
+        this.pipelineLogger = logger ?? this.pipelineLogger
+        this.cleanupWanted = on
+        let ok = true
+        if (this.upscaler && this.upscaler.algorithm == "none") {
+            // Cleanup-only: off means back to the browser's own picture
+            if (!on) {
+                this.upscaler.destroy()
+                this.upscaler = null
+            }
+        } else if (this.upscaler) {
+            ok = this.upscaler.setCleanup(on)
+        } else if (on) {
+            ok = this.startCleanupOnly()
+        }
+        this.placeAutoHdr()
+        return ok
+    }
+    private startCleanupOnly(): boolean {
+        this.upscaler = VideoUpscaler.create(this.videoElement, "none", this.pipelineLogger, true)
+        if (this.upscaler && this.videoElement.isConnected) {
+            this.upscaler.mount()
+        }
+        return this.upscaler != null && this.upscaler.isCleanupOn()
     }
 
     /// Lightning fork: HDR highlights on an HDR screen. False when this device can't.
