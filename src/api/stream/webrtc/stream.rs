@@ -29,6 +29,7 @@ use crate::{
         audio::AudioChannel,
         control::{ControlChannel, ControlChannelEvent},
         video::{VideoChannel, VideoChannelEvent},
+        view_only::is_protocol_packet,
     },
     app::AppError,
 };
@@ -46,8 +47,9 @@ pub async fn webrtc_loop(
     mut control_channel: ControlChannel,
     mut on_data_channel: mpsc::UnboundedReceiver<Arc<dyn DataChannel>>,
     handler: &WebRtcHandler,
+    view_only: bool,
 ) -> Result<(), AppError> {
-    info!("started main webrtc loop");
+    info!(view_only, "started main webrtc loop");
 
     let mut last_key_states_sequence_number = 0;
     let mut last_key_states = CompactKeyStates::default();
@@ -120,7 +122,10 @@ pub async fn webrtc_loop(
                             continue;
                         }
 
-                        audio_channel.on_frame(frame);
+                        // Lightning fork: a view-only stream sends no audio (view_only.rs)
+                        if !view_only {
+                            audio_channel.on_frame(frame);
+                        }
                     }
                     MoonlightStreamEvent::Video(VideoStreamEvent::SignalIdr) => {
                         debug!("requesting idr on behalf of the video stream (packet loss likely)");
@@ -169,6 +174,14 @@ pub async fn webrtc_loop(
             }
             result = control_channel.drive() => {
                 let event = result?;
+
+                // Lightning fork: a view-only stream relays no input (view_only.rs)
+                if view_only
+                    && let ControlChannelEvent::Packet(packet) = &event
+                    && !is_protocol_packet(packet)
+                {
+                    continue;
+                }
 
                 match event {
                     ControlChannelEvent::Packet(ControlPacket::WebState { sequence_number, keys }) => {

@@ -75,6 +75,7 @@ mod forward_interceptor;
 mod ice_servers;
 mod stream;
 mod video;
+mod view_only;
 
 pub async fn webrtc_middleware(
     mut req: ServiceRequest,
@@ -451,6 +452,7 @@ pub async fn webrtc_post(
     }
 
     debug!(req = ?req, session_description = ?session_description, "webrtc request");
+    let view_only = view_only::requested(&req);
 
     let offer_sdp =
         Session::parse(session_description.as_bytes()).map_err(WebRTCParseError::from)?;
@@ -630,6 +632,10 @@ pub async fn webrtc_post(
     // -- Get and Apply Permissions
     let permissions = user.role().await?.permissions().await?;
     apply_role_restrictions(&permissions, &mut settings);
+    // Lightning fork: a view-only stream sends nothing to the host, the microphone included
+    if view_only {
+        settings.enable_mic = false;
+    }
 
     // Adjust settings
     let server_version = host.version().await?;
@@ -737,6 +743,7 @@ pub async fn webrtc_post(
                 control_channel,
                 on_data_channel,
                 &handler,
+                view_only,
             )
             .await
             {
