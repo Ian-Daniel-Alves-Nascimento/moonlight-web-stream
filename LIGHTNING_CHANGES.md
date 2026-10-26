@@ -5,7 +5,7 @@ based on tag `v3.0.0-prerelease.7`. License: GPL-3.0-or-later (unchanged).
 
 Release tags of this fork use the form `v<upstream-version>-lightning.<n>`.
 
-## Unreleased
+## v3.0.0-prerelease.7-lightning.17 (2026-10-25)
 
 - 10 bits without HDR (`web/stream/codec.ts`, "auto" codec): an 8 bit stream turns skies, shadows
   and fog into bands and blocks. Sunshine encodes 10 bits in plain SDR when the client offers a 10
