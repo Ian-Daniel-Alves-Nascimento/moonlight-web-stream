@@ -5,6 +5,17 @@ based on tag `v3.0.0-prerelease.7`. License: GPL-3.0-or-later (unchanged).
 
 Release tags of this fork use the form `v<upstream-version>-lightning.<n>`.
 
+## Unreleased
+
+- 10 bits without HDR (`web/stream/codec.ts`, "auto" codec): an 8 bit stream turns skies, shadows
+  and fog into bands and blocks. Sunshine encodes 10 bits in plain SDR when the client offers a 10
+  bit format (HDR only when the PC's display is in HDR too), at the same bitrate, so "auto" now
+  also offers HEVC Main10 / AV1 Main 10 bit when this device decodes them in hardware (Media
+  Capabilities, `powerEfficient`). If the PC's display is in HDR, the stream comes in HDR: it
+  restarts in 8 bits and 10 bits stay off on this device for 6 hours. A 10 bit stream without
+  picture turns off only 10 bits on this device (30 days), not the codec. The stats line shows
+  "10-bit" after the codec.
+
 ## v3.0.0-prerelease.7-lightning.10 (2026-10-11)
 
 - Automatic bitrate (`web/stream/bitrate.ts`, on by default, `bitrateAuto`): the official
