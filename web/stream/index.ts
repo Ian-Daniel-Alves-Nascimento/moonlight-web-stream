@@ -15,7 +15,7 @@ import { WebRTCTransport } from "./transport/webrtc"
 import { probeDirectConnection } from "./transport/webrtc_probe"
 import { autoBitrateKbps } from "./bitrate"
 import { deviceStreamerSize, evenFloor, physicalScreenSize, safeAreaScreenSize, UpscalingDecision, upscalingStreamerSize } from "./upscaling"
-import { autoVideoCodecs, codecFamily, CodecFamily } from "./codec"
+import { autoVideoCodecs, codecFamily, CodecFamily, isTenBit } from "./codec"
 import { allVideoCodecs, andVideoCodecs, emptyVideoCodecs, hasAnyCodec } from "./video"
 import { VideoRenderer, VideoRendererSetup } from "./video/index"
 import { VideoElementRenderer } from "./video/video_element"
@@ -348,6 +348,9 @@ export class Stream implements Component {
     /// Lightning fork: called once when Auto HDR or the cleanup limit the picture's frame rate
     /// (the browser draws pages slower than the video, e.g. iPhone Safari at ~60)
     onFrameLimit: ((limit: Parameters<NonNullable<VideoElementRenderer["onFrameLimit"]>>[0]) => void) | null = null
+    /// Lightning fork: a 10 bit SDR stream ("auto" codec) came in HDR because the PC's display is
+    /// in HDR; the page restarts it in 8 bits (see codec.ts)
+    onUnwantedHdr: (() => void) | null = null
     /// Lightning fork: Auto HDR's drawn vs video frame rate (for the stats)
     getAutoHdrRates(): { drawnFps: number, videoFps: number } | null {
         const renderer = this.videoRenderer
@@ -422,6 +425,9 @@ export class Stream implements Component {
 
     getVideoCodec(): CodecFamily | null {
         return this.videoFormat ? codecFamily(this.videoFormat) : null
+    }
+    isVideoTenBit(): boolean {
+        return this.videoFormat ? isTenBit(this.videoFormat) : false
     }
     usesAutoCodec(): boolean {
         return this.settings.videoCodec == "auto"
@@ -945,6 +951,12 @@ export class Stream implements Component {
     private onReceivePacket(packet: ControlPacket) {
         switch (packet.tag) {
             case ControlPacket_Tags.HdrMode:
+                if (packet.inner.enabled && !this.settings.hdr && this.usesAutoCodec() &&
+                    this.videoFormat && isTenBit(this.videoFormat) && this.onUnwantedHdr) {
+                    this.debugLog("Codec: the PC's display is in HDR, restarting in 8 bits")
+                    this.onUnwantedHdr()
+                    break
+                }
                 if (this.videoRenderer && this.videoRenderer.setHdrMode) {
                     this.videoRenderer?.setHdrMode(packet.inner.enabled, packet.inner.sunshine)
                 }

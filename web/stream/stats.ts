@@ -30,7 +30,7 @@ export type LatencyHints = {
     decode: string
     fps: string
 }
-export function latencySummary(transport: Record<string, StatValue>, requestedFps: number, bitrate: { kbps: number, auto: boolean } | null, hints: LatencyHints): string {
+export function latencySummary(transport: Record<string, StatValue>, requestedFps: number, bitrate: { kbps: number, auto: boolean } | null, hints: LatencyHints, tenBit = false): string {
     const n = (key: string) => typeof transport[key] == "number" && isFinite(transport[key] as number) ? transport[key] as number : null
     const rtt = n("rttMs"), buffer = n("jitterBufferMs"), decode = n("decodeTimePerFrameMs")
     const fps = n("currentFps"), loss = n("lossPercent"), mbps = n("receivedMbps"), idr = n("keyFramesPerMinute")
@@ -43,7 +43,7 @@ export function latencySummary(transport: Record<string, StatValue>, requestedFp
     if (loss != null) parts.push(`loss ${loss.toFixed(1)}%`)
     if (idr != null) parts.push(`IDR ${idr.toFixed(0)}/min`)
     if (mbps != null) parts.push(`${mbps.toFixed(1)}${bitrate ? `/${(bitrate.kbps / 1000).toFixed(1)}` : ""} Mbps${bitrate?.auto ? " auto" : ""}`)
-    if (typeof transport.codec == "string") parts.push(transport.codec)
+    if (typeof transport.codec == "string") parts.push(transport.codec + (tenBit ? " 10-bit" : ""))
 
     // The first problem found, in the order that hurts the most
     let hint = ""

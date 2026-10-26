@@ -22,7 +22,7 @@ import { PAD, TouchGamepad, TouchGamepadLayout, TouchGamepadOptions, TouchGamepa
 import { AutoHdrStrength, autoHdrSupported } from "./stream/video/auto_hdr"
 import { latencySummary, streamStatsToText } from "./stream/stats"
 import { physicalScreenSize } from "./stream/upscaling"
-import { avoidCodec, codecDisplayName } from "./stream/codec"
+import { avoidCodec, avoidTenBitSdr, codecDisplayName } from "./stream/codec"
 import "./styles/index"
 import { LogLevel, uniffiInitAsync, Logger as UniffiLogger, setLogger as uniffiSetLogger } from "./uniffi/entry"
 
@@ -308,7 +308,7 @@ class ViewerApp implements Component {
                     buffer: I.stream.latencyHintBuffer,
                     decode: I.stream.latencyHintDecode,
                     fps: I.stream.latencyHintFps,
-                }) + "\n\n" + streamStatsToText(current)
+                }, this.getStream()?.isVideoTenBit() ?? false) + "\n\n" + streamStatsToText(current)
                 const upscaler = this.getStream()?.getUpscalerStats()
                 if (upscaler) {
                     const level = upscaler.lastAlgorithm ?? "off"
@@ -376,6 +376,11 @@ Upscaler: ${mode} ${upscaler.input[0]}x${upscaler.input[1]} -> ${upscaler.output
             if (text) {
                 showNotification(text, "warn")
             }
+        }
+        // Lightning fork: 10 bits without HDR, but the PC's display is in HDR (codec.ts)
+        this.stream.onUnwantedHdr = () => {
+            avoidTenBitSdr("hdr")
+            this.restartStream()
         }
         this.startStream(settings)
 
@@ -608,7 +613,12 @@ Upscaler: ${mode} ${upscaler.input[0]}x${upscaler.input[1]} -> ${upscaler.output
         // device from now on, and the stream restarts (the next attempt falls back to H.264)
         const codec = this.stream.getVideoCodec()
         if (this.stream.usesAutoCodec() && codec && codec != "h264") {
-            avoidCodec(codec)
+            // A 10 bit stream without picture: only 10 bits go, the codec stays (in 8 bits)
+            if (this.stream.isVideoTenBit()) {
+                avoidTenBitSdr("noPicture")
+            } else {
+                avoidCodec(codec)
+            }
             this.restartStream()
             return
         }
