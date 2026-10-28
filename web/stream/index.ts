@@ -155,6 +155,10 @@ function isFirefox(): boolean {
 }
 
 const WEBRTC_CONNECT_TIMEOUT_MS = 15000
+/// Lightning fork: with the bridge as a fallback, a direct path gets less time. When it exists it
+/// connects in a couple of seconds; a hard NAT never does, and the guest is waiting.
+const WEBRTC_PROBE_TIMEOUT_WITH_FALLBACK_MS = 6000
+const WEBRTC_CONNECT_TIMEOUT_WITH_FALLBACK_MS = 8000
 const FALLBACK_RECONNECT_DELAY_MS = 500
 
 export class Stream implements Component {
@@ -233,11 +237,21 @@ export class Stream implements Component {
         // Lightning fork: "auto" no longer falls back to the Web Socket transport. That fallback
         // carries the video over the signaling path (a tunnel/CDN in our setup), so a network
         // without a direct path reports it instead. "websocket" can still be picked explicitly.
-        // Lightning fork: a Lightning Launcher guest whose page relays the WebSocket uses it
-        // over the page's own connection with the host (one NAT traversal, see ponte.ts)
+        // Lightning fork: a Lightning Launcher guest whose page relays the WebSocket still tries the
+        // direct path first: its own RTP has the lowest delay and FEC. Only a network that cannot
+        // reach the host directly carries the video over the page's connection (SCTP, which
+        // retransmits and slows down on loss).
         if (bridgesWebSocket()) {
-            this.debugLog("Using the parent page's connection (WebSocket transport through the bridge)")
-            await this.tryWebSocketTransport()
+            this.hasFallback = true
+            if (desiredTransport != "websocket") {
+                await this.tryWebRTCTransport()
+            }
+            this.hasFallback = false
+            if (!this.wasConnected) {
+                this.debugLog("No direct path: using the parent page's connection (WebSocket transport through the bridge)")
+                this.dispatchStage("network")
+                await this.tryWebSocketTransport()
+            }
         } else if (desiredTransport == "auto" || desiredTransport == "webrtc") {
             await this.tryWebRTCTransport()
         } else if (desiredTransport == "websocket") {
@@ -251,12 +265,18 @@ export class Stream implements Component {
     /// Lightning fork: set once a transport connected, so a later close reads as "ended".
     private wasConnected = false
     private failureSent = false
+    /// Lightning fork: while true, a failure only logs, because another transport comes next.
+    private hasFallback = false
     private dispatchStage(stage: StreamStage) {
         const event: InfoEvent = new CustomEvent("stream-info", { detail: { type: "stage", stage } })
         this.eventTarget.dispatchEvent(event)
     }
     /// Only the first reason is reported: it's the cause, what follows are consequences.
     private dispatchFailure(reason: StreamFailure) {
+        if (this.hasFallback) {
+            this.debugLog(`Direct path failed (${reason}), trying the fallback`)
+            return
+        }
         if (this.failureSent) {
             return
         }
@@ -586,7 +606,10 @@ export class Stream implements Component {
         // streaming for it, so a network that cannot connect directly doesn't wake Sunshine.
         this.debugLog("Received WebRTC Config, probing direct connection")
 
-        const probe = await probeDirectConnection(this.api, { iceServers: config.iceServers }, this.logger)
+        const probe = await probeDirectConnection(
+            this.api, { iceServers: config.iceServers }, this.logger,
+            this.hasFallback ? WEBRTC_PROBE_TIMEOUT_WITH_FALLBACK_MS : undefined,
+        )
         if (!probe.connected) {
             this.debugLog(`Direct connection probe failed (${probe.reason}): this network cannot reach the host directly, so the stream was not started`, { type: "ifErrorDescription" })
             this.dispatchFailure("noDirectPath")
@@ -644,7 +667,7 @@ export class Stream implements Component {
 
         // Wait for negotiation, but don't let a stuck ICE check block fallback forever.
         const onTimeout: Promise<TransportShutdown> =
-            wait(WEBRTC_CONNECT_TIMEOUT_MS)
+            wait(this.hasFallback ? WEBRTC_CONNECT_TIMEOUT_WITH_FALLBACK_MS : WEBRTC_CONNECT_TIMEOUT_MS)
                 .then(() => "failednoconnect")
 
         const connectData: TransportShutdown | TransportConnectData = await Promise.race([
@@ -716,6 +739,8 @@ export class Stream implements Component {
     private async onConnect(connectData: TransportConnectData) {
         this.logger.debug("connected successfully, creating video and audio pipelines")
         this.wasConnected = true
+        // Connected: from here on a failure is the session's, not a reason to switch transports
+        this.hasFallback = false
         this.videoFormat = connectData.videoSetup.codec
         this.dispatchStage("video")
 

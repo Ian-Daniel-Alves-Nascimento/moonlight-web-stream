@@ -20,6 +20,7 @@ export async function probeDirectConnection(
     api: Api,
     configuration: RTCConfiguration,
     logger?: Logger,
+    timeoutMs: number = WEBRTC_PROBE_TIMEOUT_MS,
 ): Promise<ProbeResult> {
     const peer = new RTCPeerConnection(configuration)
 
@@ -37,7 +38,7 @@ export async function probeDirectConnection(
         const answerSdp = await apiWebRTCProbe(api, offerSdp)
         await peer.setRemoteDescription({ type: "answer", sdp: answerSdp })
 
-        const connected = await waitForConnection(peer, WEBRTC_PROBE_TIMEOUT_MS)
+        const connected = await waitForConnection(peer, timeoutMs)
         if (!connected) {
             return { connected: false, reason: `connection ${peer.connectionState}, ice ${peer.iceConnectionState}` }
         }
