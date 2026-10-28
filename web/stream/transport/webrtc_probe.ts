@@ -53,7 +53,8 @@ export async function probeDirectConnection(
     }
 }
 
-function waitForGathering(peer: RTCPeerConnection): Promise<void> {
+/// Lightning fork: also used by the main stream (webrtc.ts), see there
+export function waitForGathering(peer: RTCPeerConnection): Promise<void> {
     if (peer.iceGatheringState == "complete") {
         return Promise.resolve()
     }

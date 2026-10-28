@@ -10,6 +10,7 @@ import { DataPipe } from "../pipeline/pipes"
 import { StatValue } from "../stats"
 import { TrackVideoRenderer, VideoRenderer } from "../video/index"
 import { generateControlPacketConfig, IControlStream, Transport, TransportAudioType, TransportConnectData, TransportOptions, TransportShutdown, TransportVideoType } from "./index"
+import { waitForGathering } from "./webrtc_probe"
 
 /// Lightning fork: how long (×100 ms) to wait for the first video packet to name the codec.
 const CODEC_STATS_TRIES = 30
@@ -88,11 +89,19 @@ export class WebRTCTransport implements Transport {
         this.logger?.debug("Setting webrtc local description")
         await this.peer.setLocalDescription(offer)
 
+        // Lightning fork: the candidates go inside the offer, as the connection probe does (up to
+        // 3 s of gathering); only late ones are trickled. Relayed through a parent page (guests of
+        // the Lightning Launcher) the trickle PATCHes didn't reach the host: the probe connected,
+        // and the stream right after it never got a single candidate.
+        await waitForGathering(this.peer)
+        const gathered = this.peer.localDescription?.sdp ?? offer.sdp ?? ""
+        this.pendingIceCandidates = []
+
         // Insert custom options
         this.sdpOfferOptions = {
             ...options
         }
-        const sdp = webrtcSessionOfferApply(offer.sdp ?? "", this.sdpOfferOptions)
+        const sdp = webrtcSessionOfferApply(gathered, this.sdpOfferOptions)
 
         this.logger?.debug(`successfully generated webrtc sdp with options ${JSON.stringify(this.sdpOfferOptions)}`)
         console.debug("Client Sdp", sdp)
