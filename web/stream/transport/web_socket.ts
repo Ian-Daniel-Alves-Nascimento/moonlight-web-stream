@@ -2,6 +2,7 @@ import { Api } from "../../api"
 import { WebSocketChannel, WebSocketClientboundMessage, WebSocketServerboundMessage } from "../../api_bindings"
 import { ClientInputEvent, ControlPacket, ControlPacketConfig, controlPacketDeserialize, controlPacketSerialize, InputBatcher, PacketDirection } from "../../uniffi/moonlight_common_bindings"
 import { globalObject } from "../../util"
+import { bridgesWebSocket, PonteWebSocket } from "../../ponte"
 import { AudioPlayer, TrackAudioPlayer } from "../audio/index"
 import { Logger } from "../log"
 import { DataPipe } from "../pipeline/pipes"
@@ -33,7 +34,10 @@ export class WebSocketTransport implements Transport {
         this.logger = logger
 
         const wsApiHost = api.host_url.replace(/^http(s)?:/, "ws$1:")
-        this.ws = new WebSocket(`${wsApiHost}/host/stream/web_socket`)
+        // Lightning fork: through the parent page's own connection with the host (ponte.ts)
+        this.ws = bridgesWebSocket()
+            ? new PonteWebSocket(new URL(`${api.host_url}/host/stream/web_socket`, location.href).pathname) as unknown as WebSocket
+            : new WebSocket(`${wsApiHost}/host/stream/web_socket`)
 
         // Configure Web Socket
         this.ws.binaryType = "arraybuffer"

@@ -15,6 +15,15 @@
 //                    { type: "lt-fetch-chunk", id, data: ArrayBuffer }
 //                    { type: "lt-fetch-end", id }
 //                    { type: "lt-fetch-error", id, message }
+//
+// Lightning fork, "single traversal" (`?ponte=1&ponteWs=1`): the stream's WebSocket also goes
+// through the parent, over the connection it already has with the host, so the video doesn't
+// need a second NAT traversal (the WebRTC stream used to fail where the parent's own
+// connection worked). The player then uses the WebSocket transport instead of WebRTC.
+//   player → parent  { type: "lt-ws-open", id, path }   { type: "lt-ws-send", id, data }
+//                    { type: "lt-ws-close", id }
+//   parent → player  { type: "lt-ws-opened", id }   { type: "lt-ws-message", id, data }
+//                    { type: "lt-ws-closed", id }
 import { buildUrl } from "./config_"
 
 type Pending = {
@@ -27,6 +36,12 @@ type Pending = {
 const pending = new Map<number, Pending>()
 let nextId = 1
 let installed = false
+let listening = false
+function listen() {
+    if (listening) return
+    listening = true
+    window.addEventListener("message", onMessage)
+}
 
 export function isBridged(): boolean {
     try {
@@ -46,6 +61,13 @@ function onMessage(event: MessageEvent) {
     if (event.source !== window.parent || event.origin !== location.origin) return
     const message = event.data
     if (!message || typeof message.type != "string" || typeof message.id != "number") return
+    if (message.type.startsWith("lt-ws-")) {
+        const socket = sockets.get(message.id)
+        if (message.type == "lt-ws-opened") socket?.opened()
+        else if (message.type == "lt-ws-message") socket?.received(message.data)
+        else if (message.type == "lt-ws-closed") socket?.closed()
+        return
+    }
     const request = pending.get(message.id)
     if (!request) return
 
@@ -112,7 +134,7 @@ export function installFetchBridge() {
 
     const apiPath = new URL(buildUrl("/api/")).pathname
     const originalFetch = window.fetch.bind(window)
-    window.addEventListener("message", onMessage)
+    listen()
 
     window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
         const url = new URL(typeof input == "string" ? input : input instanceof URL ? input.href : input.url, location.href)
@@ -120,6 +142,64 @@ export function installFetchBridge() {
             return bridgedFetch(url.pathname + url.search, init)
         }
         return originalFetch(input, init)
+    }
+}
+
+/// Lightning fork: whether the stream's WebSocket goes through the parent (see the top).
+export function bridgesWebSocket(): boolean {
+    return isBridged() && new URLSearchParams(location.search).get("ponteWs") == "1"
+}
+
+const sockets = new Map<number, PonteWebSocket>()
+let nextSocketId = 1
+
+/// A WebSocket whose bytes travel through the parent page. Only what the WebSocket transport
+/// uses: send, close, readyState and the open/message/close/error events.
+export class PonteWebSocket extends EventTarget {
+    readonly id = nextSocketId++
+    binaryType: BinaryType = "arraybuffer"
+    readyState: number = 0   // CONNECTING
+
+    constructor(path: string) {
+        super()
+        listen()
+        sockets.set(this.id, this)
+        post({ type: "lt-ws-open", id: this.id, path })
+    }
+
+    send(data: string | ArrayBuffer | ArrayBufferView) {
+        if (this.readyState != 1) return
+        if (typeof data == "string") {
+            post({ type: "lt-ws-send", id: this.id, data })
+            return
+        }
+        const buffer = data instanceof ArrayBuffer
+            ? data.slice(0)
+            : (data.buffer as ArrayBuffer).slice(data.byteOffset, data.byteOffset + data.byteLength)
+        post({ type: "lt-ws-send", id: this.id, data: buffer }, [buffer])
+    }
+
+    close() {
+        if (this.readyState >= 2) return
+        post({ type: "lt-ws-close", id: this.id })
+        this.closed()
+    }
+
+    opened() {
+        if (this.readyState != 0) return
+        this.readyState = 1
+        this.dispatchEvent(new Event("open"))
+    }
+    received(data: unknown) {
+        if (this.readyState == 1) this.dispatchEvent(new MessageEvent("message", { data }))
+    }
+    closed() {
+        if (this.readyState == 3) return
+        const wasConnecting = this.readyState == 0
+        this.readyState = 3
+        sockets.delete(this.id)
+        if (wasConnecting) this.dispatchEvent(new Event("error"))
+        this.dispatchEvent(new CloseEvent("close"))
     }
 }
 

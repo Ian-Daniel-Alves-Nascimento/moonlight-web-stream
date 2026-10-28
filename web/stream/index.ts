@@ -3,6 +3,7 @@ import { Component } from "../component/index"
 import { Settings, TransportType, UpscalingAlgorithm } from "../component/settings_menu"
 import { ControlPacket, ControlPacket_Tags, VideoFormats } from "../uniffi/moonlight_common_bindings"
 import { wait } from "../util"
+import { bridgesWebSocket } from "../ponte"
 import { AudioPlayer, AudioPlayerSetup } from "./audio/index"
 import { buildAudioPipeline } from "./audio/pipeline"
 import { defaultStreamInputConfig, StreamInput } from "./input"
@@ -232,7 +233,12 @@ export class Stream implements Component {
         // Lightning fork: "auto" no longer falls back to the Web Socket transport. That fallback
         // carries the video over the signaling path (a tunnel/CDN in our setup), so a network
         // without a direct path reports it instead. "websocket" can still be picked explicitly.
-        if (desiredTransport == "auto" || desiredTransport == "webrtc") {
+        // Lightning fork: a Lightning Launcher guest whose page relays the WebSocket uses it
+        // over the page's own connection with the host (one NAT traversal, see ponte.ts)
+        if (bridgesWebSocket()) {
+            this.debugLog("Using the parent page's connection (WebSocket transport through the bridge)")
+            await this.tryWebSocketTransport()
+        } else if (desiredTransport == "auto" || desiredTransport == "webrtc") {
             await this.tryWebRTCTransport()
         } else if (desiredTransport == "websocket") {
             await this.tryWebSocketTransport()
