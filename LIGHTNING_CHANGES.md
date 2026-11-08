@@ -5,6 +5,16 @@ based on tag `v3.0.0-prerelease.7`. License: GPL-3.0-or-later (unchanged).
 
 Release tags of this fork use the form `v<upstream-version>-lightning.<n>`.
 
+## v3.0.0-prerelease.7-lightning.18 (2026-11-08)
+
+- Single traversal for bridged guests ("play together" through the Lightning Launcher,
+  `?ponte=1&ponteWs=1`, `web/ponte.ts`): when the direct video path to the PC fails, the stream's
+  WebSocket goes through the guest page's own connection to the PC (which already carries input and
+  audio). The direct path is still tried first, with shorter timeouts (probe 6 s, connection 8 s);
+  its failure is not shown to the guest. Before, a network where only the page's connection worked
+  got audio but no video (LT-306).
+- The main stream sends its ICE candidates inside the offer, like the probe.
+
 ## v3.0.0-prerelease.7-lightning.17 (2026-10-25)
 
 - 10 bits without HDR (`web/stream/codec.ts`, "auto" codec): an 8 bit stream turns skies, shadows
