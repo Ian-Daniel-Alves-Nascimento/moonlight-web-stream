@@ -9,8 +9,12 @@ use crate::app::{
 };
 
 pub enum ExternalStreamEvent {
-    WebRTCAddIceCandidate { ice_sdp_frag: String },
+    WebRTCAddIceCandidate {
+        ice_sdp_frag: String,
+    },
     Stop,
+    /// Lightning fork: hold the stream without closing it (pause.rs).
+    SetPaused(bool),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

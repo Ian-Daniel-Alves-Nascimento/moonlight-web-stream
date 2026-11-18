@@ -370,12 +370,16 @@ Upscaler: ${mode} ${upscaler.input[0]}x${upscaler.input[1]} -> ${upscaler.output
         this.toggleFullscreenWithKeybind = settings.toggleFullscreenWithKeybind
 
         this.stream = new Stream(this.api, hostId, appId, settings, [browserWidth, browserHeight], bootstrapRole.permissions)
-        // Lightning fork: Auto HDR and the picture cleanup draw at the browser's page rate
+        // Lightning fork: Auto HDR and the picture cleanup turned themselves off (they limited
+        // the frame rate): no warning, the menu shows them off for this stream
         this.stream.onFrameLimit = limit => {
-            const text = frameLimitText(limit)
-            if (text) {
-                showNotification(text, "warn")
+            if (limit.autoHdr) {
+                this.autoHdrChoice = "off"
             }
+            if (limit.cleanup) {
+                this.cleanupChoice = "off"
+            }
+            this.sidebar.showFrameLimited(limit.autoHdr, limit.cleanup)
         }
         // Lightning fork: 10 bits without HDR, but the PC's display is in HDR (codec.ts)
         this.stream.onUnwantedHdr = () => {
@@ -1643,22 +1647,6 @@ function touchToGamepadState(touch: TouchGamepadState): GamepadState {
 const SVG_EYE_OFF = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18"/><path d="M10.6 5.1A9.8 9.8 0 0 1 12 5c5 0 9 4.5 10 7a13.4 13.4 0 0 1-3.1 4.2M6.5 6.6A13.2 13.2 0 0 0 2 12c1 2.5 5 7 10 7a9.6 9.6 0 0 0 4.3-1"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>`
 const SVG_MORE = `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>`
 
-/// Lightning fork: the warning when Auto HDR / the cleanup limit the frame rate; "" if neither is on.
-function frameLimitText(limit: { drawnFps: number, videoFps: number, autoHdr: boolean, cleanup: boolean }): string {
-    const features = [limit.autoHdr ? I.stream.frameLimitHdr : null, limit.cleanup ? I.stream.frameLimitCleanup : null]
-        .filter(feature => feature != null).join(I.stream.frameLimitAnd)
-    if (!features) {
-        return ""
-    }
-    const video = String(Math.round(limit.videoFps))
-    let text = I.stream.frameLimitWarning.replace("{features}", features).replace("{fps}", String(Math.round(limit.drawnFps))).split("{video}").join(video)
-    // iPhone / iPad: Safari's own setting lifts the limit
-    if (/iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform == "MacIntel" && navigator.maxTouchPoints > 1)) {
-        text += " " + I.stream.frameLimitSafari
-    }
-    return text
-}
-
 function rememberCleanupChoice(choice: "auto" | "off") {
     try {
         const stored = JSON.parse(localStorage.getItem("mlSettings") ?? "{}")
@@ -1743,6 +1731,10 @@ class SegmentedChoice {
         this.select(selected)
     }
 
+    /// The value changed elsewhere (no onChange)
+    setValue(value: string) {
+        this.select(value)
+    }
     private select(value: string) {
         this.value = value
         for (const [option, button] of this.buttons) {
@@ -1973,6 +1965,17 @@ class ViewerSidebar implements Component, Sidebar {
         section.append(header, choice.root)
         this.div.appendChild(section)
         return section
+    }
+
+    /// Lightning fork: Auto HDR / the cleanup turned themselves off for this stream (they limited
+    /// the frame rate). The stored choice stays: the next stream tries again.
+    showFrameLimited(autoHdrOff: boolean, cleanupOff: boolean) {
+        if (autoHdrOff) {
+            this.autoHdr.setValue("off")
+        }
+        if (cleanupOff) {
+            this.cleanup.setValue("off")
+        }
     }
 
     // -- Picture cleanup

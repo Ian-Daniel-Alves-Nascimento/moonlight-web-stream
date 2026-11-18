@@ -24,6 +24,13 @@
 //                    { type: "lt-ws-close", id }
 //   parent → player  { type: "lt-ws-opened", id }   { type: "lt-ws-message", id, data }
 //                    { type: "lt-ws-closed", id }
+//
+// Lightning fork, hints from the embedding page (only read when bridged):
+//   `sound=0`    the page plays the sound itself: the player keeps its audio muted and never
+//                asks for a tap to turn it on (the hint came back on every new player)
+//   `cleanup=0`  no picture cleanup (it draws on a canvas, at the page's frame rate)
+//   `path=direct|websocket`  how the previous stream of this page connected: "direct" skips
+//                the connection probe (~5 s), "websocket" goes straight to the bridge
 import { buildUrl } from "./config_"
 
 type Pending = {
@@ -143,6 +150,21 @@ export function installFetchBridge() {
         }
         return originalFetch(input, init)
     }
+}
+
+/// Lightning fork: a hint from the embedding page (see the top); null when not bridged.
+function bridgeHint(name: string): string | null {
+    return isBridged() ? new URLSearchParams(location.search).get(name) : null
+}
+export function bridgeWithoutSound(): boolean {
+    return bridgeHint("sound") == "0"
+}
+export function bridgeWithoutCleanup(): boolean {
+    return bridgeHint("cleanup") == "0"
+}
+export function bridgeKnownPath(): "direct" | "websocket" | null {
+    const path = bridgeHint("path")
+    return path == "direct" || path == "websocket" ? path : null
 }
 
 /// Lightning fork: whether the stream's WebSocket goes through the parent (see the top).

@@ -40,6 +40,7 @@ use rtc::rtp_transceiver::rtp_sender::{
 };
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
@@ -73,9 +74,12 @@ mod convert;
 mod ext_color_space;
 mod forward_interceptor;
 mod ice_servers;
+mod pause;
 mod stream;
 mod video;
 mod view_only;
+
+pub use pause::webrtc_pause_post;
 
 pub async fn webrtc_middleware(
     mut req: ServiceRequest,
@@ -234,6 +238,8 @@ struct WebRtcHandler {
     on_ice_gathering_finished: Notify,
     on_data_channel_sender: mpsc::UnboundedSender<Arc<dyn DataChannel>>,
     peer_state: Mutex<RTCPeerConnectionState>,
+    /// Lightning fork: no video leaves while set (pause.rs)
+    paused: AtomicBool,
 }
 
 #[async_trait]
@@ -340,6 +346,7 @@ pub async fn webrtc_probe_post(
         peer_state: Mutex::new(RTCPeerConnectionState::New),
         on_ice_gathering_finished: Notify::new(),
         on_data_channel_sender,
+        paused: AtomicBool::new(false),
     });
 
     let peer = PeerConnectionBuilder::default()
@@ -535,6 +542,7 @@ pub async fn webrtc_post(
         peer_state: Mutex::new(RTCPeerConnectionState::New),
         on_ice_gathering_finished: Notify::new(),
         on_data_channel_sender,
+        paused: AtomicBool::new(false),
     });
 
     // Create new peer
@@ -852,6 +860,9 @@ pub async fn webrtc_post(
                                 };
                             }
                         }
+                    }
+                    ExternalStreamEvent::SetPaused(paused) => {
+                        handler.paused.store(paused, Ordering::Relaxed);
                     }
                     ExternalStreamEvent::Stop => {
                         info!("closing the stream");

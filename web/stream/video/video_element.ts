@@ -269,10 +269,13 @@ export class VideoElementRenderer implements TrackVideoRenderer, VideoRenderer {
         }
     }
     /// Lightning fork: called once when Auto HDR or the picture cleanup has been drawing fewer
-    /// frames than the video (the browser's limit, e.g. iPhone Safari at ~60): they limit the
-    /// picture to that rate, the player says so.
+    /// frames than the video (the browser's limit, e.g. iPhone Safari at ~60). Until lightning.18
+    /// they stayed on and the player showed a long warning (again on every new stream: the
+    /// Lightning Launcher's guests got it on each return); now the full frame rate wins and they
+    /// turn themselves off for this stream, without a word (the stats and the log say so).
     onFrameLimit: ((limit: { drawnFps: number, videoFps: number, autoHdr: boolean, cleanup: boolean }) => void) | null = null
     private frameLimitReported = false
+    private frameLimitedOff = false
     private watchFrameRate(meter: FrameRateMeter) {
         meter.framesDecoded = this.framesDecodedSource
         meter.onLimited = (drawnFps, videoFps) => {
@@ -280,7 +283,16 @@ export class VideoElementRenderer implements TrackVideoRenderer, VideoRenderer {
                 return
             }
             this.frameLimitReported = true
-            this.onFrameLimit?.({ drawnFps, videoFps, autoHdr: this.autoHdr != null, cleanup: this.cleanupWanted })
+            const limit = { drawnFps, videoFps, autoHdr: this.autoHdr != null, cleanup: this.cleanupWanted }
+            // Both draw on a canvas over the video: either one left on would keep the limit
+            if (this.autoHdr) {
+                this.disableAutoHdr()
+            }
+            if (this.cleanupWanted) {
+                this.frameLimitedOff = true
+                this.setCleanup(false)
+            }
+            this.onFrameLimit?.(limit)
         }
     }
     /// Lightning fork: Auto HDR's drawn vs video frame rate, for the stats.
@@ -303,6 +315,9 @@ export class VideoElementRenderer implements TrackVideoRenderer, VideoRenderer {
         }
         if (this.gpuCleanupStarting) {
             return { where: "starting", stats: null }
+        }
+        if (this.frameLimitedOff) {
+            return { where: "off, it limited the frame rate", stats: null }
         }
         return { where: this.gpuCleanupGaveUp || this.gpuCleanupFailed ? "off, this device can't keep up" : "off", stats: null }
     }

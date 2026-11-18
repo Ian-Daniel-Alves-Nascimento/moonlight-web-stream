@@ -5,6 +5,21 @@ based on tag `v3.0.0-prerelease.7`. License: GPL-3.0-or-later (unchanged).
 
 Release tags of this fork use the form `v<upstream-version>-lightning.<n>`.
 
+## v3.0.0-prerelease.7-lightning.19 (2026-11-18)
+
+- Pause a WebRTC stream without closing it: `POST /api/host/stream/webrtc/<id>/pause` with the
+  body `1` or `0` (`src/api/stream/webrtc/pause.rs`). Paused, no video or audio frame leaves the
+  server; on resume an IDR is requested and the first frame sent is a key frame. A request with
+  `X-Lightning-View-Only: 1` is refused, so a view-only client can't lift its own pause.
+- Picture cleanup and Auto HDR no longer show a warning when they limit the frame rate (the
+  browser drawing the canvas slower than the video): they turn themselves off for that stream
+  and the side menu shows them off. The stored choice stays. The frame rate check no longer
+  counts the frames the browser dropped by itself.
+- Hints from an embedding page, read only when bridged (`web/ponte.ts`): `sound=0` (the page
+  plays the sound: the player stays muted and never shows "tap to turn on sound"), `cleanup=0`,
+  and `path=direct|websocket` (how the page's previous stream connected: skips the ~5 s probe,
+  or goes straight to the bridge).
+
 ## v3.0.0-prerelease.7-lightning.18 (2026-11-08)
 
 - Single traversal for bridged guests ("play together" through the Lightning Launcher,

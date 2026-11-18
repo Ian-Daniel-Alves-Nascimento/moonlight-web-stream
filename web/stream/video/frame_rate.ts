@@ -76,9 +76,12 @@ export class FrameRateMeter {
     }
 
     /// The <video>'s own count, or else the connection's (read in the background, about once a
-    /// second, so it lags a little: both ends of a window lag alike)
+    /// second, so it lags a little: both ends of a window lag alike). The frames the browser
+    /// dropped by itself don't count: drawing can't show them either, and counting them blamed
+    /// the canvas for a limit that was the browser's (the plain video loses them too).
     private decodedFrames(): number {
-        const own = this.video.getVideoPlaybackQuality?.().totalVideoFrames ?? 0
+        const quality = this.video.getVideoPlaybackQuality?.()
+        const own = quality ? Math.max(0, quality.totalVideoFrames - quality.droppedVideoFrames) : 0
         if (own > 0 || !this.framesDecoded) {
             return own
         }

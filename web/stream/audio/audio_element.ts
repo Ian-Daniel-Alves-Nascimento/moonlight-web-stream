@@ -1,4 +1,5 @@
 import { globalObject } from "../../util"
+import { bridgeWithoutSound } from "../../ponte"
 import { Pipe, PipeInfo } from "../pipeline/index"
 import { addPipePassthrough } from "../pipeline/pipes"
 import { AudioPlayerSetup, TrackAudioPlayer } from "./index"
@@ -23,6 +24,7 @@ export class AudioElementPlayer implements TrackAudioPlayer {
     // Lightning fork: the browser may refuse sound until a tap (autoplay policy). Then we play
     // muted, show a hint and unmute on the next tap. A gamepad press does not count as a tap.
     private wantsSound = false
+    private withoutSound = bridgeWithoutSound()
     private hint = document.createElement("div")
     private wasHidden = false
     private onPageBack = () => {
@@ -96,6 +98,11 @@ export class AudioElementPlayer implements TrackAudioPlayer {
 
     private playAttempt = 0
     private startPlaying() {
+        // The embedding page plays the sound (ponte.ts, sound=0): this one stays muted, no hint
+        if (this.withoutSound) {
+            this.audioElement.muted = true
+            return
+        }
         // Answers of an older attempt arrive late and must not undo a newer one
         const attempt = ++this.playAttempt
         this.audioElement.muted = false

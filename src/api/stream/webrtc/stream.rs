@@ -1,6 +1,6 @@
 use std::{
     future::pending,
-    sync::Arc,
+    sync::{Arc, atomic::Ordering},
     time::{Duration, Instant},
 };
 
@@ -15,6 +15,7 @@ use moonlight_common::stream::{
         video::VideoStreamEvent,
     },
     tokio::{MoonlightStream, MoonlightStreamEvent},
+    video::FrameType,
 };
 use tokio::{select, sync::mpsc, time::sleep_until};
 use tracing::{debug, info, warn};
@@ -28,6 +29,7 @@ use crate::{
         WebRtcHandler,
         audio::AudioChannel,
         control::{ControlChannel, ControlChannelEvent},
+        pause::{FrameDecision, PauseGate},
         video::{VideoChannel, VideoChannelEvent},
         view_only::is_protocol_packet,
     },
@@ -58,6 +60,7 @@ pub async fn webrtc_loop(
     let mut peer_was_disconnected = true;
     let mut last_client_idr: Option<Instant> = None;
     let mut client_idr_pending = false;
+    let mut pause_gate = PauseGate::default();
     loop {
         if !stream.is_alive() {
             info!("stopping stream because the moonlight stream is dead");
@@ -122,8 +125,9 @@ pub async fn webrtc_loop(
                             continue;
                         }
 
-                        // Lightning fork: a view-only stream sends no audio (view_only.rs)
-                        if !view_only {
+                        // Lightning fork: a view-only stream sends no audio (view_only.rs), and a
+                        // paused one nothing (pause.rs)
+                        if !view_only && !handler.paused.load(Ordering::Relaxed) {
                             audio_channel.on_frame(frame);
                         }
                     }
@@ -136,6 +140,23 @@ pub async fn webrtc_loop(
                     MoonlightStreamEvent::Video(VideoStreamEvent::OnFrame(frame)) => {
                         if !matches!(peer_state, RTCPeerConnectionState::Connected) {
                             continue;
+                        }
+
+                        // Lightning fork: paused, no frame leaves; resumed, the picture starts
+                        // again at a key frame (pause.rs)
+                        let paused = handler.paused.load(Ordering::Relaxed);
+                        let now = Instant::now();
+                        match pause_gate.on_video_frame(paused, || frame.as_ref().parsed_frame_type == FrameType::Idr, now) {
+                            FrameDecision::Send => {}
+                            FrameDecision::Drop => continue,
+                            FrameDecision::DropAndRequestIdr => {
+                                debug!("requesting idr to resume the paused stream");
+                                if let Err(err) = stream.send_raw(ControlPacket::RequestIdr) {
+                                    warn!(error = %err, "failed to send idr");
+                                }
+                                last_client_idr = Some(now);
+                                continue;
+                            }
                         }
 
                         video_channel.on_frame(frame);

@@ -3,7 +3,7 @@ import { Component } from "../component/index"
 import { Settings, TransportType, UpscalingAlgorithm } from "../component/settings_menu"
 import { ControlPacket, ControlPacket_Tags, VideoFormats } from "../uniffi/moonlight_common_bindings"
 import { wait } from "../util"
-import { bridgesWebSocket } from "../ponte"
+import { bridgeKnownPath, bridgeWithoutCleanup, bridgesWebSocket } from "../ponte"
 import { AudioPlayer, AudioPlayerSetup } from "./audio/index"
 import { buildAudioPipeline } from "./audio/pipeline"
 import { defaultStreamInputConfig, StreamInput } from "./input"
@@ -243,7 +243,8 @@ export class Stream implements Component {
         // retransmits and slows down on loss).
         if (bridgesWebSocket()) {
             this.hasFallback = true
-            if (desiredTransport != "websocket") {
+            // The page's previous stream needed the bridge: the direct path would fail again
+            if (desiredTransport != "websocket" && bridgeKnownPath() != "websocket") {
                 await this.tryWebRTCTransport()
             }
             this.hasFallback = false
@@ -353,6 +354,10 @@ export class Stream implements Component {
     /// before the upscaler or alone (video/cleanup_shaders.ts). Not on an HDR stream.
     private enableCleanup(renderer: VideoRenderer) {
         if ((this.settings.imageCleanup ?? "auto") == "off" || this.settings.hdr) {
+            return
+        }
+        if (bridgeWithoutCleanup()) {
+            this.debugLog("Picture cleanup: off, the embedding page asked so")
             return
         }
         if (!(renderer instanceof VideoElementRenderer)) {
@@ -606,10 +611,14 @@ export class Stream implements Component {
         // streaming for it, so a network that cannot connect directly doesn't wake Sunshine.
         this.debugLog("Received WebRTC Config, probing direct connection")
 
-        const probe = await probeDirectConnection(
-            this.api, { iceServers: config.iceServers }, this.logger,
-            this.hasFallback ? WEBRTC_PROBE_TIMEOUT_WITH_FALLBACK_MS : undefined,
-        )
+        // Lightning fork: the page's previous stream connected directly (ponte.ts, path=direct):
+        // the probe would only repeat that, ~5 s more on every reopen
+        const probe: Awaited<ReturnType<typeof probeDirectConnection>> = bridgeKnownPath() == "direct"
+            ? { connected: true, localType: "known", remoteType: "known", local: null }
+            : await probeDirectConnection(
+                this.api, { iceServers: config.iceServers }, this.logger,
+                this.hasFallback ? WEBRTC_PROBE_TIMEOUT_WITH_FALLBACK_MS : undefined,
+            )
         if (!probe.connected) {
             this.debugLog(`Direct connection probe failed (${probe.reason}): this network cannot reach the host directly, so the stream was not started`, { type: "ifErrorDescription" })
             this.dispatchFailure("noDirectPath")
